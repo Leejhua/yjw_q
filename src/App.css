@@ -1,0 +1,47 @@
+/* App组件特定样式 */
+.app-title {
+  font-size: 24px;
+  font-weight: bold;
+  margin-bottom: 20px;
+  text-align: center;
+}
+
+.chat-bubble-user {
+  background-color: #1890ff;
+  color: white;
+  border-radius: 8px 8px 0 8px;
+  padding: 10px 15px;
+  margin-bottom: 10px;
+  max-width: 80%;
+  align-self: flex-end;
+}
+
+.chat-bubble-ai {
+  background-color: #f0f0f0;
+  color: #333;
+  border-radius: 8px 8px 8px 0;
+  padding: 10px 15px;
+  margin-bottom: 10px;
+  max-width: 80%;
+  align-self: flex-start;
+  border: 1px solid #e8e8e8;
+}
+
+.memory-card-highlight {
+  border-left: 4px solid #1890ff;
+  padding-left: 10px;
+  margin-bottom: 10px;
+}
+
+.flow-step-active {
+  background-color: #e6f7ff;
+  border: 1px solid #91d5ff;
+}
+
+/* 响应式调整 */
+@media (max-width: 768px) {
+  .chat-bubble-user,
+  .chat-bubble-ai {
+    max-width: 90%;
+  }
+}

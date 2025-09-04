@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>清除记忆数据</title>
+</head>
+<body>
+    <h1>清除本地存储数据</h1>
+    <button onclick="clearData()">清除所有记忆数据</button>
+    <div id="result"></div>
+    
+    <script>
+        function clearData() {
+            const result = document.getElementById('result');
+            
+            try {
+                // 清除localStorage
+                localStorage.removeItem('ai-messages');
+                localStorage.removeItem('ai-flows');
+                localStorage.removeItem('ai-api-key');
+                localStorage.clear();
+                
+                // 清除sessionStorage
+                sessionStorage.clear();
+                
+                result.innerHTML = '<p style="color: green;">✅ 所有本地存储数据已清除！</p>';
+                
+                // 刷新页面
+                setTimeout(() => {
+                    window.location.reload();
+                }, 1000);
+                
+            } catch (error) {
+                result.innerHTML = '<p style="color: red;">❌ 清除失败：' + error.message + '</p>';
+            }
+        }
+    </script>
+</body>
+</html>

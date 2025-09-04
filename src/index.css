@@ -1,0 +1,184 @@
+/* 全局样式重置 */
+:root {
+  font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+
+  color-scheme: light dark;
+  color: rgba(255, 255, 255, 0.87);
+  background-color: #242424;
+
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background-color: #f0f2f5;
+}
+
+#root {
+  width: 100%;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 主应用容器 */
+.app-container {
+  display: flex;
+  width: 100%;
+  height: 100vh;
+  background-color: #f0f2f5;
+}
+
+/* 左侧面板样式 */
+.left-panel {
+  width: 250px;
+  background-color: #fff;
+  border-right: 1px solid #e8e8e8;
+  display: flex;
+  flex-direction: column;
+}
+
+.panel-header {
+  padding: 16px;
+  background-color: #1890ff;
+  color: white;
+  font-size: 18px;
+  font-weight: 500;
+}
+
+/* 主内容区域 */
+.main-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* 对话界面样式 */
+.chat-container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background-color: #fafafa;
+}
+
+.chat-header {
+  padding: 16px;
+  background-color: #1890ff;
+  color: white;
+  font-size: 18px;
+  font-weight: 500;
+}
+
+.chat-messages {
+  flex: 1;
+  padding: 16px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.message-user,
+.message-ai {
+  max-width: 80%;
+  padding: 12px 16px;
+  border-radius: 8px;
+  word-wrap: break-word;
+}
+
+.message-user {
+  align-self: flex-end;
+  background-color: #1890ff;
+  color: white;
+}
+
+.message-ai {
+  align-self: flex-start;
+  background-color: #fff;
+  border: 1px solid #e8e8e8;
+}
+
+.chat-input {
+  padding: 16px;
+  background-color: #fff;
+  border-top: 1px solid #e8e8e8;
+}
+
+/* 记忆库样式 */
+.memory-card {
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 12px;
+  background-color: #fff;
+  border: 1px solid #e8e8e8;
+}
+
+.memory-highlight {
+  background-color: #fff2e8;
+  border-bottom: 2px solid #fa8c16;
+  padding: 2px 4px;
+  cursor: pointer;
+  border-radius: 2px;
+}
+
+/* 指令样式 */
+.workflow-card {
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 16px;
+  background-color: #fff;
+  border: 1px solid #e8e8e8;
+}
+
+/* 设置界面样式 */
+.settings-container {
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+/* 响应式设计 */
+@media (max-width: 768px) {
+  .left-panel {
+    width: 200px;
+  }
+  
+  .message-user,
+  .message-ai {
+    max-width: 90%;
+  }
+}
+
+/* 滚动条样式 */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f1f1;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #888;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #555;
+}
