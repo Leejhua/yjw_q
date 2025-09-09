@@ -110,11 +110,171 @@ function App() {
     };
     
     loadPersonalMemories();
+    loadInstructions(); // 同时加载指令列表
+    loadLaoziSession(); // 加载老祖会话状态
   }, []);
   const [workflows, setWorkflows] = useState([]); // 完全空白，不读取任何存储
   const [apiKey, setApiKey] = useState(""); // 完全空白，不读取任何存储
   const [aiService, setAiService] = useState("deepseek"); // AI服务选择：deepseek 或 qcli
   const [qCliStatus, setQCliStatus] = useState({ available: false, sessions: 0 });
+  const [instructions, setInstructions] = useState([]); // 指令列表
+  const [instructionsLoading, setInstructionsLoading] = useState(false); // 指令加载状态
+  const [isScrolling, setIsScrolling] = useState(false); // 滚动状态管理
+  const [laoziSession, setLaoziSession] = useState(null); // 老祖评测会话状态
+
+  // 加载指令列表
+  const loadInstructions = async () => {
+    setInstructionsLoading(true);
+    try {
+      const response = await fetch('http://localhost:3001/api/instructions');
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success) {
+          setInstructions(data.instructions);
+          console.log('📋 指令列表加载成功:', data.instructions);
+        }
+      }
+    } catch (error) {
+      console.error('加载指令列表失败:', error);
+      message.error('加载指令列表失败');
+    } finally {
+      setInstructionsLoading(false);
+    }
+  };
+
+  // 加载老祖评测会话状态
+  const loadLaoziSession = async () => {
+    try {
+      const response = await fetch('http://localhost:3001/api/laozi-session/default');
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success) {
+          setLaoziSession(data.session);
+          console.log('📊 老祖会话状态:', data.session);
+        }
+      }
+    } catch (error) {
+      console.error('加载老祖会话状态失败:', error);
+    }
+  };
+
+  // 退出老祖模式
+  const exitLaoziMode = async () => {
+    try {
+      // 切换到对话页面
+      setCurrentTab("chat");
+      
+      // 发送退出消息
+      const exitMessage = "退出老祖";
+      setInputValue(exitMessage);
+      
+      setTimeout(() => {
+        handleSendMessage(exitMessage);
+        setInputValue("");
+      }, 200);
+      
+      // 清除会话状态
+      setLaoziSession(null);
+      
+      message.success('正在退出老祖模式...');
+    } catch (error) {
+      console.error('退出老祖模式失败:', error);
+      message.error('退出失败');
+    }
+  };
+
+  // 手动完成评测
+  const completeAssessment = async () => {
+    try {
+      // 切换到对话页面
+      setCurrentTab("chat");
+      
+      // 发送完成评测消息
+      const completeMessage = "手动完成老祖评测，显示最终境界评定结果";
+      setInputValue(completeMessage);
+      
+      setTimeout(() => {
+        handleSendMessage(completeMessage);
+        setInputValue("");
+      }, 200);
+      
+      // 标记会话完成
+      if (laoziSession) {
+        updateLaoziSession(laoziSession.sessionId, { isCompleted: true });
+        setLaoziSession({...laoziSession, isCompleted: true});
+      }
+      
+      message.success('正在生成最终评测结果...');
+    } catch (error) {
+      console.error('完成评测失败:', error);
+      message.error('完成评测失败');
+    }
+  };
+
+  // 重新激活老祖模式
+  const reactivateLaoziMode = async () => {
+    try {
+      // 切换到对话页面
+      setCurrentTab("chat");
+      
+      // 发送重新激活消息
+      const reactivateMessage = "重新激活老祖模式，继续评测";
+      setInputValue(reactivateMessage);
+      
+      setTimeout(() => {
+        handleSendMessage(reactivateMessage);
+        setInputValue("");
+      }, 200);
+      
+      message.success('正在重新激活老祖模式...');
+    } catch (error) {
+      console.error('重新激活失败:', error);
+      message.error('重新激活失败');
+    }
+  };
+
+  // 重置老祖评测会话
+  const resetLaoziSession = async () => {
+    try {
+      const response = await fetch('http://localhost:3001/api/laozi-session/default/reset', {
+        method: 'POST'
+      });
+      if (response.ok) {
+        setLaoziSession(null);
+        message.success('评测会话已重置');
+        console.log('🔄 老祖会话已重置');
+      }
+    } catch (error) {
+      console.error('重置老祖会话失败:', error);
+      message.error('重置失败');
+    }
+  };
+
+  // 执行指令
+  const executeInstruction = (instruction) => {
+    console.log('🚀 执行指令:', instruction.name);
+    console.log('📝 触发消息:', instruction.triggerMessage);
+    
+    // 1. 切换到对话页面
+    console.log('📄 切换到对话页面');
+    setCurrentTab("chat");
+    
+    // 2. 设置输入框内容
+    console.log('✏️ 设置输入框内容');
+    setInputValue(instruction.triggerMessage);
+    
+    // 3. 延迟发送消息，确保页面切换完成
+    setTimeout(() => {
+      console.log('📤 发送消息:', instruction.triggerMessage);
+      handleSendMessage(instruction.triggerMessage);
+      // 清空输入框
+      setInputValue("");
+      console.log('✅ 指令执行完成');
+    }, 200);
+    
+    // 显示成功提示
+    message.success(`正在启动指令：${instruction.name}`);
+  };
 
   // 添加清除所有记忆数据的功能
   const clearAllMemories = () => {
@@ -493,35 +653,54 @@ function App() {
   };
 
   const scrollToBottom = () => {
-    // 多重保障确保滚动到底部
+    // 只在对话页面激活时才滚动
+    if (currentTab !== 'chat') return;
+    
+    // 防抖处理
+    if (isScrolling) return;
+    setIsScrolling(true);
+    
+    // 等待DOM完全渲染后再滚动
     requestAnimationFrame(() => {
-      // 方法1：直接操作滚动容器
-      const scrollContainer = document.querySelector('[data-chat-scroll-container]');
-      if (scrollContainer) {
-        scrollContainer.scrollTop = scrollContainer.scrollHeight;
-      }
-      
-      // 方法2：使用锚点滚动
       setTimeout(() => {
-        messagesEndRef.current?.scrollIntoView?.({ behavior: "auto", block: "end" });
-      }, 50);
-      
-      // 方法3：强制滚动（备用方案）
-      setTimeout(() => {
-        const container = document.querySelector('[data-chat-scroll-container]');
-        if (container) {
-          container.scrollTo({
-            top: container.scrollHeight,
-            behavior: 'auto'
-          });
+        const scrollContainer = document.querySelector('[data-chat-scroll-container]');
+        if (scrollContainer) {
+          scrollContainer.scrollTop = scrollContainer.scrollHeight;
         }
-      }, 150);
+        setIsScrolling(false);
+      }, 50); // 给足够时间让内容渲染完成
     });
   };
 
+  // 简化的滚动管理 - 只在消息真正变化时触发
   useEffect(() => {
-    scrollToBottom();
-  }, [messages]);
+    if (currentTab === 'chat' && messages.length > 0) {
+      scrollToBottom();
+    }
+  }, [messages]); // 只监听messages变化，不监听currentTab
+  
+  // 移除页面切换时的滚动重置，因为组件不再重新挂载
+
+  // 检测Amazon Q回复并自动重新激活
+  const detectAndReactivate = (response) => {
+    const isAmazonQReply = response.includes('Amazon Q') || 
+                          response.includes('AWS') || 
+                          response.includes('roleplay') ||
+                          response.includes('fictional character');
+    
+    if (isAmazonQReply && laoziSession && !laoziSession.isCompleted) {
+      console.log('🔍 检测到Amazon Q回复，准备自动重新激活');
+      
+      // 延迟3秒后自动重新激活
+      setTimeout(() => {
+        message.warning('检测到老祖模式中断，正在自动重新激活...');
+        
+        setTimeout(() => {
+          reactivateLaoziMode();
+        }, 1000);
+      }, 3000);
+    }
+  };
 
   // 处理用户输入
   const handleSendMessage = async (text = null) => {
@@ -735,9 +914,11 @@ function App() {
     setLogs((prev) => [newLog, ...prev.slice(0, 19)]); // 保持最多20条日志，提供完整操作记录
   };
 
-  // Q CLI对话函数
-  const chatWithQCli = async (userMessage, messageHistory) => {
+  // Q CLI对话函数 - 增强版本
+  const chatWithQCli = async (userMessage, relevantMemories) => {
     try {
+      console.log('🚀 调用增强版Q CLI，记忆数量:', relevantMemories.length);
+      
       const response = await fetch('http://localhost:3001/api/chat-with-q', {
         method: 'POST',
         headers: {
@@ -745,7 +926,8 @@ function App() {
         },
         body: JSON.stringify({
           message: userMessage,
-          sessionId: 'default'
+          sessionId: 'default',
+          memories: relevantMemories // 传递相关记忆
         }),
       });
 
@@ -755,6 +937,26 @@ function App() {
       }
 
       const data = await response.json();
+      console.log('✅ Q CLI响应成功，耗时:', data.debug?.duration + 'ms');
+      
+      // 如果Q CLI执行了文件操作，刷新记忆库
+      if (data.response && (data.response.includes('fs_write') || data.response.includes('Using tool: fs_write'))) {
+        console.log('🔄 检测到Q CLI文件操作，刷新记忆库');
+        try {
+          // 刷新后端缓存
+          await fetch('http://localhost:3001/api/memories/refresh', { method: 'POST' });
+          // 重新加载前端记忆
+          const memResponse = await fetch('http://localhost:3001/api/memories');
+          if (memResponse.ok) {
+            const updatedMemories = await memResponse.json();
+            setMemories(updatedMemories);
+            console.log('✅ 记忆库已同步更新，新数量:', updatedMemories.length);
+          }
+        } catch (refreshError) {
+          console.error('⚠️ 刷新记忆库失败:', refreshError);
+        }
+      }
+      
       return data.response;
     } catch (error) {
       console.error('Q CLI对话错误:', error);
@@ -780,7 +982,7 @@ function App() {
       }
       
       try {
-        return await chatWithQCli(userMessage, []);
+        return await chatWithQCli(userMessage, relevantMemories); // 传递相关记忆
       } catch (error) {
         addLog("error", "Q CLI调用失败，尝试切换到DeepSeek", error.message);
         if (!apiKey.trim()) {
@@ -931,37 +1133,45 @@ ${context}
       if (inputRef.current) {
         inputRef.current.focus();
       }
-      
-      // 组件挂载时自动滚动到底部
-      scrollToBottom();
-      
-      // 添加延迟滚动，确保内容完全渲染
-      const timer = setTimeout(() => {
-        scrollToBottom();
-      }, 100);
-      
-      return () => clearTimeout(timer);
     }, []);
     
-    // 监听消息变化，自动滚动到底部
-    useEffect(() => {
-      scrollToBottom();
-    }, [messages]);
-    
-    // 监听currentTab变化，当切换回对话时滚动到底部
-    useEffect(() => {
-      if (currentTab === 'chat') {
-        // 延迟滚动，确保组件完全渲染
-        const timer = setTimeout(() => {
-          scrollToBottom();
-        }, 200);
-        return () => clearTimeout(timer);
-      }
-    }, [currentTab]);
+    // 统一的滚动管理 - 已在上面定义，这里删除重复的
 
     return (
       <div style={{ height: "100vh", display: "flex", flexDirection: "column" }}>
-        <div data-chat-scroll-container style={{ flex: 1, overflow: "auto", padding: 24 }}>
+        <div 
+          data-chat-scroll-container 
+          style={{ 
+            height: "calc(100vh - 200px)", // 固定高度，避免布局变化
+            overflow: "auto", 
+            padding: 24,
+            scrollBehavior: "auto", // 避免平滑滚动导致的抖动
+            overflowAnchor: "none"   // 防止自动滚动锚点
+          }}
+        >
+          {/* 老祖模式状态提示 */}
+          {laoziSession && !laoziSession.isCompleted && (
+            <Alert
+              message="🧙‍♂️ 老祖评测模式进行中"
+              description={
+                <div>
+                  <div>当前进度：第{laoziSession.currentQuestion}问 ({laoziSession.progress})</div>
+                  <div style={{ marginTop: 4, fontSize: 12, color: '#666' }}>
+                    输入"退出老祖"可随时退出评测模式
+                  </div>
+                </div>
+              }
+              type="info"
+              showIcon
+              style={{ marginBottom: 16 }}
+              action={
+                <Button size="small" onClick={exitLaoziMode}>
+                  退出
+                </Button>
+              }
+            />
+          )}
+          
           <Card 
             title={
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -1835,143 +2045,169 @@ ${context}
     return (
       <div style={{ padding: 24, height: "100vh", overflow: "auto" }}>
         <Card
-          title="指令管理"
+          title={
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span>🎯 指令中心</span>
+              {instructionsLoading && <LoadingOutlined />}
+            </div>
+          }
           extra={
-            <Button
-              type="primary"
-              icon={<PlusOutlined />}
-              onClick={() => {
-                Modal.info({
-                  title: "创建新指令",
-                  width: 600,
-                  content: (
-                    <Form
-                      layout="vertical"
-                      onFinish={(values) => {
-                        const newWorkflow = {
-                          id: Date.now(),
-                          name: values.name,
-                          description: values.description,
-                          category: values.category,
-                          steps: values.steps?.split("\n").filter(s => s.trim()) || [],
-                          createdAt: new Date().toISOString(),
-                        };
-                        setWorkflows((prev) => [...prev, newWorkflow]);
-                        addLog("success", "创建指令", values.name);
-                        Modal.destroyAll();
-                      }}
-                    >
-                      <Form.Item
-                        label="名称"
-                        name="name"
-                        rules={[{ required: true, message: "请输入指令名称" }]}
-                      >
-                        <Input placeholder="输入指令名称..." />
-                      </Form.Item>
-                      <Form.Item
-                        label="描述"
-                        name="description"
-                        rules={[{ required: true, message: "请输入描述" }]}
-                      >
-                        <TextArea rows={2} placeholder="输入指令描述..." />
-                      </Form.Item>
-                      <Form.Item
-                        label="类别"
-                        name="category"
-                        rules={[{ required: true, message: "请选择类别" }]}
-                      >
-                        <Select placeholder="选择类别">
-                          <Option value="生活">生活</Option>
-                          <Option value="工作">工作</Option>
-                          <Option value="学习">学习</Option>
-                          <Option value="健康">健康</Option>
-                          <Option value="财务">财务</Option>
-                          <Option value="其他">其他</Option>
-                        </Select>
-                      </Form.Item>
-                      <Form.Item label="步骤" name="steps">
-                        <TextArea
-                          rows={4}
-                          placeholder="输入执行步骤，每行一个步骤..."
-                        />
-                      </Form.Item>
-                      <Form.Item>
-                        <Button type="primary" htmlType="submit">
-                          创建指令
-                        </Button>
-                      </Form.Item>
-                    </Form>
-                  ),
-                });
-              }}
-            >
-              创建指令
-            </Button>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <Button
+                icon={<ReloadOutlined />}
+                onClick={() => {
+                  loadInstructions();
+                  loadLaoziSession();
+                }}
+                loading={instructionsLoading}
+              >
+                刷新
+              </Button>
+              {laoziSession && (
+                <Button
+                  danger
+                  size="small"
+                  onClick={resetLaoziSession}
+                >
+                  重置评测
+                </Button>
+              )}
+              {laoziSession && (
+                <Button
+                  type="default"
+                  size="small"
+                  onClick={exitLaoziMode}
+                >
+                  退出老祖
+                </Button>
+              )}
+              {laoziSession && !laoziSession.isCompleted && (
+                <Button
+                  type="primary"
+                  size="small"
+                  onClick={reactivateLaoziMode}
+                >
+                  重新激活
+                </Button>
+              )}
+              {laoziSession && !laoziSession.isCompleted && laoziSession.currentQuestion >= 8 && (
+                <Button
+                  type="default"
+                  size="small"
+                  onClick={completeAssessment}
+                >
+                  完成评测
+                </Button>
+              )}
+            </div>
           }
         >
-          <List
-            grid={{ gutter: 16, column: 2 }}
-            dataSource={workflows}
-            locale={{
-              emptyText: (
-                <div style={{ textAlign: 'center', padding: '40px 0' }}>
-                  <Empty
-                    image={Empty.PRESENTED_IMAGE_SIMPLE}
-                    description={
-                      <div>
-                        <p style={{ fontSize: '16px', color: '#666' }}>暂无指令</p>
-                        <p style={{ fontSize: '14px', color: '#999' }}>点击右上角按钮创建新指令</p>
-                      </div>
-                    }
-                  />
+          {/* 老祖评测状态显示 */}
+          {laoziSession && (
+            <Card 
+              size="small" 
+              style={{ marginBottom: 16, backgroundColor: '#f6ffed', borderColor: '#b7eb8f' }}
+              title={
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span>🧙‍♂️ 老祖评测进行中</span>
+                  <Tag color="processing">第{laoziSession.currentQuestion}问</Tag>
                 </div>
-              )
-            }}
-            renderItem={(workflow) => (
-              <List.Item>
-                <Card
-                  hoverable
-                  actions={[
-                    <Button
-                      type="primary"
-                      icon={<PlayCircleOutlined />}
-                      onClick={() => handleRunWorkflow(workflow.id)}
-                    >
-                      执行
-                    </Button>,
-                    <Button
-                      danger
-                      icon={<DeleteOutlined />}
-                      onClick={() => handleDeleteWorkflow(workflow.id)}
-                    >
-                      删除
-                    </Button>,
-                  ]}
-                >
-                  <Card.Meta
-                    title={workflow.name}
-                    description={workflow.description}
-                  />
-                  <div style={{ marginTop: 12 }}>
-                    <Tag color="green">{workflow.category}</Tag>
-                    <div style={{ marginTop: 8, fontSize: 12, color: "#666" }}>
-                      创建时间：{new Date(workflow.createdAt).toLocaleDateString("zh-CN")}
-                    </div>
+              }
+            >
+              <div style={{ marginBottom: 8 }}>
+                <Text strong>评测进度：</Text>
+                <span style={{ marginLeft: 8 }}>{laoziSession.progress} 已完成</span>
+              </div>
+              {laoziSession.nextQuestion && (
+                <div style={{ marginBottom: 8 }}>
+                  <Text strong>当前问题：</Text>
+                  <div style={{ marginTop: 4, padding: 8, backgroundColor: '#fff', borderRadius: 4, fontSize: 12 }}>
+                    【{laoziSession.nextQuestion.type}】{laoziSession.nextQuestion.text}
                   </div>
-                  {workflow.steps && workflow.steps.length > 0 && (
+                </div>
+              )}
+              <div style={{ fontSize: 12, color: '#666' }}>
+                开始时间：{new Date(laoziSession.startTime).toLocaleString('zh-CN')}
+              </div>
+            </Card>
+          )}
+
+          {instructions.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: '60px 0' }}>
+              <Empty
+                image={Empty.PRESENTED_IMAGE_SIMPLE}
+                description={
+                  <div>
+                    <p style={{ fontSize: '16px', color: '#666' }}>暂无可用指令</p>
+                    <p style={{ fontSize: '14px', color: '#999' }}>
+                      请在 /流程/ 文件夹中添加指令文件
+                    </p>
+                  </div>
+                }
+              />
+            </div>
+          ) : (
+            <List
+              grid={{ gutter: 16, column: 2 }}
+              dataSource={instructions}
+              renderItem={(instruction) => (
+                <List.Item>
+                  <Card
+                    hoverable
+                    style={{ height: '100%' }}
+                    actions={[
+                      <Button
+                        type="primary"
+                        icon={<PlayCircleOutlined />}
+                        onClick={() => executeInstruction(instruction)}
+                        style={{ width: '100%' }}
+                        disabled={laoziSession && !laoziSession.isCompleted && instruction.id === 'AI修仙老祖'}
+                      >
+                        {laoziSession && !laoziSession.isCompleted && instruction.id === 'AI修仙老祖' 
+                          ? '评测进行中' 
+                          : '启动指令'
+                        }
+                      </Button>
+                    ]}
+                  >
+                    <Card.Meta
+                      avatar={
+                        <div style={{ fontSize: '24px' }}>
+                          {instruction.icon}
+                        </div>
+                      }
+                      title={
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          {instruction.name}
+                          {laoziSession && !laoziSession.isCompleted && instruction.id === 'AI修仙老祖' && (
+                            <Tag color="processing" size="small">进行中</Tag>
+                          )}
+                        </div>
+                      }
+                      description={instruction.description || '暂无描述'}
+                    />
                     <div style={{ marginTop: 12 }}>
-                      <Text strong>执行步骤：</Text>
-                      <ol style={{ margin: 0, paddingLeft: 20, fontSize: 12 }}>
-                        {workflow.steps.map((step, index) => (
-                          <li key={index}>{typeof step === "string" ? step : step.content}</li>
-                        ))}
-                      </ol>
+                      {instruction.keywords && instruction.keywords.length > 0 && (
+                        <div style={{ marginBottom: 8 }}>
+                          <Text type="secondary" style={{ fontSize: 12 }}>
+                            触发词：
+                          </Text>
+                          {instruction.keywords.map((keyword, index) => (
+                            <Tag key={index} size="small" style={{ marginLeft: 4 }}>
+                              {keyword}
+                            </Tag>
+                          ))}
+                        </div>
+                      )}
+                      <div style={{ fontSize: 12, color: "#999" }}>
+                        文件：{instruction.filename}
+                      </div>
                     </div>
-                  )}
-                </Card>
-              </List.Item>
-            )}
-          />
+                  </Card>
+                </List.Item>
+              )}
+            />
+          )}
         </Card>
       </div>
     );
@@ -2247,20 +2483,45 @@ ${context}
   };
 
   const renderContent = () => {
-    switch (currentTab) {
-      case "chat":
-        return <ChatPanel currentTab={currentTab} />;
-      case "memory":
-        return <MemoryLibrary />;
-      case "workflow":
-        return <WorkflowPanel />;
-      case "settings":
-        return <SettingsPanel />;
-      case "logs":
-        return <LogsPanel />;
-      default:
-        return <ChatPanel currentTab={currentTab} />;
-    }
+    return (
+      <div style={{ height: "100vh", position: "relative" }}>
+        {/* 所有组件常驻，用CSS控制显示，避免重复挂载 */}
+        <div style={{ 
+          display: currentTab === 'chat' ? 'block' : 'none',
+          height: '100%'
+        }}>
+          <ChatPanel currentTab={currentTab} />
+        </div>
+        
+        <div style={{ 
+          display: currentTab === 'memory' ? 'block' : 'none',
+          height: '100%'
+        }}>
+          <MemoryLibrary />
+        </div>
+        
+        <div style={{ 
+          display: currentTab === 'workflow' ? 'block' : 'none',
+          height: '100%'
+        }}>
+          <WorkflowPanel />
+        </div>
+        
+        <div style={{ 
+          display: currentTab === 'settings' ? 'block' : 'none',
+          height: '100%'
+        }}>
+          <SettingsPanel />
+        </div>
+        
+        <div style={{ 
+          display: currentTab === 'logs' ? 'block' : 'none',
+          height: '100%'
+        }}>
+          <LogsPanel />
+        </div>
+      </div>
+    );
   };
 
   return (

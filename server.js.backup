@@ -178,22 +178,24 @@ function extractQResponse(rawOutput) {
     .replace(/\x1B\[[\d;]*[a-zA-Z]/g, '')
     .replace(/\x1B[@-_]/g, '')
     .replace(/\x1B\]/g, '')
-    // 移除工具调用信息（关键修复）
-    .replace(/Using tool: [^>]+/g, '')
-    .replace(/Reading [^>]+/g, '')
-    .replace(/Successfully [^>]+/g, '')
-    .replace(/Completed in [^>]+/g, '')
-    .replace(/Path: [^>]+/g, '')
-    .replace(/Purpose: [^>]+/g, '')
-    .replace(/Creating: [^>]+/g, '')
-    .replace(/\+ \d+: [^>]+/g, '')
-    .replace(/Reading file: [^>]+/g, '')
     // 移除控制字符但保留换行和空格
     .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g, '')
+    // 移除工具调用相关信息
+    .replace(/🛠️\s*Using tool:.*?\n/g, '')
+    .replace(/Using tool:.*?\n/g, '')
+    .replace(/Path:.*?\n/g, '')
+    .replace(/Purpose:.*?\n/g, '')
+    .replace(/Creating:.*?\n/g, '')
+    .replace(/Updating:.*?\n/g, '')
+    .replace(/Reading.*?:\s*.*?\n/g, '')
+    .replace(/Successfully.*?\n/g, '')
+    .replace(/Completed in.*?\n/g, '')
     // 移除工具调用的装饰符号和加载动画
-    .replace(/🛠️\s*/g, '')
     .replace(/[⋮●✓↳⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏⢀⢠⢰⢸⢹⢺⢻⣀⣄⣆⣇⣧⣷⣿]/g, '')
     .replace(/\(trusted\)/g, '')
+    // 移除行号和diff格式
+    .replace(/^\s*[\+\-]\s*\d+.*?:/gm, '')
+    .replace(/^\s*\d+.*?:/gm, '')
     // 清理提示符
     .replace(/^>\s*/gm, '')
     // 规范化空白字符
@@ -205,7 +207,7 @@ function extractQResponse(rawOutput) {
   console.log('🧹 清理后内容预览:', cleanOutput.substring(0, 300));
   
   if (cleanOutput && cleanOutput.length > 5) {
-    console.log('✅ 提取成功，返回清理后内容');
+    console.log('✅ 提取成功');
     return cleanOutput;
   }
   
@@ -244,161 +246,10 @@ app.post('/api/chat-with-q', async (req, res) => {
       });
     }
 
-    // 检查是否为指令调用
-    console.log('🎯 检测指令调用...');
-    let isInstructionCall = false;
-    let instructionContent = '';
-    let enhancedPrompt = message; // 初始化提示词
-    
-    // 检查是否有进行中的老祖评测会话
-    let existingSession = getLaoziSession(sessionId);
-    
-    // 严格的指令识别逻辑：只有明确的启动指令或进行中的会话才触发
-    const isExplicitStart = message.includes('我要老祖') || message.includes('启动老祖') || message.includes('开始境界评定');
-    const isExplicitExit = message.includes('退出老祖') || message.includes('结束评测') || message.includes('停止指令');
-    const hasActiveSession = existingSession && !existingSession.isCompleted;
-    
-    // 处理退出指令
-    if (isExplicitExit && existingSession) {
-      console.log('🚪 用户主动退出老祖指令');
-      laoziSessions.delete(sessionId);
-      
-      enhancedPrompt = `用户要求退出AI修仙老祖评测系统。
-
-请以Amazon Q的身份回应，说明：
-1. 已退出老祖评测模式
-2. 恢复正常的Amazon Q助手服务
-3. 可以继续提供AWS、开发、文件操作等技术支持
-
-请不要继续扮演老祖角色。`;
-      
-      isInstructionCall = true;
-    }
-    // 只有明确启动指令或有进行中会话才进入老祖模式
-    else if (isExplicitStart || hasActiveSession) {
-      console.log('🧙‍♂️ 检测到老祖指令调用');
-      isInstructionCall = true;
-      
-      try {
-        const instructionPath = path.join(__dirname, '流程', 'AI修仙老祖.md');
-        const memoryPath = path.join(__dirname, '领域', '能力管理', 'AI能力境界', '老祖记忆.md');
-        const personalInfoPath = path.join(__dirname, '个人记忆', '01_个人基本信息.md');
-        
-        // 读取指令文件
-        if (fs.existsSync(instructionPath)) {
-          instructionContent = await fs.promises.readFile(instructionPath, 'utf-8');
-          console.log('📋 老祖指令文件读取成功');
-        }
-        
-        // 读取相关记忆
-        let memoryContent = '';
-        if (fs.existsSync(memoryPath)) {
-          memoryContent += await fs.promises.readFile(memoryPath, 'utf-8');
-          console.log('🧠 老祖记忆文件读取成功');
-        }
-        if (fs.existsSync(personalInfoPath)) {
-          memoryContent += '\n\n' + await fs.promises.readFile(personalInfoPath, 'utf-8');
-          console.log('👤 个人信息文件读取成功');
-        }
-        
-        // 检查是否有进行中的评测会话（已在上面检查过）
-        let session = existingSession;
-        let sessionInfo = '';
-        
-        if (session && !session.isCompleted) {
-          // 继续现有评测
-          console.log(`🔄 继续现有评测会话，当前第${session.currentQuestion}问`);
-          console.log(`📝 用户回答第${session.currentQuestion}问: ${message}`);
-          
-          // 检测是否需要重新激活（Amazon Q模式检测）
-          const needRestart = needsReactivation(session, message);
-          
-          if (needRestart || message.includes('什么情况') || message.includes('重新激活')) {
-            // 重新激活当前段落
-            const currentSegment = getCurrentSegment(session.currentQuestion);
-            console.log(`🔄 重新激活第${currentSegment}段落`);
-            
-            sessionInfo = `
-检测到会话中断，重新激活老祖评测模式：
-${generateSegmentPrompt(currentSegment, session)}
-
-用户刚才的回应可能是困惑或系统错误，请重新以老祖身份继续第${session.currentQuestion}问的评测。
-`;
-          } else {
-            // 正常处理回答
-            sessionInfo = `
-${generateSegmentPrompt(getCurrentSegment(session.currentQuestion), session)}
-
-用户回答第${session.currentQuestion}问: ${message}
-
-请点评用户回答，然后：
-${session.currentQuestion < 8 ? `继续第${session.currentQuestion + 1}问` : '进行完整的境界评定'}
-`;
-            
-            // 保存用户回答
-            session.answers[session.currentQuestion] = message;
-            
-            // 更新会话状态
-            if (session.currentQuestion < 8) {
-              updateLaoziSession(sessionId, { currentQuestion: session.currentQuestion + 1 });
-            } else {
-              updateLaoziSession(sessionId, { isCompleted: true });
-            }
-          }
-          
-        } else if (message.includes('我要老祖') || message.includes('境界评定')) {
-          // 开始新的评测
-          console.log('🎯 开始新的老祖评测');
-          session = createLaoziSession(sessionId);
-          sessionInfo = `
-开始新的境界评测：
-- 会话ID: ${sessionId}
-- 开始第1问评测
-- 用户请求: ${message}
-
-请按照老祖指令开始第1问的评测流程。
-重要：请严格按照智渊真人的角色设定回应，不要以Amazon Q的身份回应。
-`;
-        } else {
-          // 普通老祖对话
-          sessionInfo = `
-普通老祖对话：
-- 用户消息: ${message}
-- 不是评测流程，按照老祖角色正常回应
-重要：请严格按照智渊真人的角色设定回应，不要以Amazon Q的身份回应。
-`;
-        }
-        
-        // 构建指令执行的提示词
-        enhancedPrompt = `请按照以下AI能力评测系统的要求进行回应：
-
-${instructionContent}
-
-${sessionInfo}
-
-相关记忆信息：
-${memoryContent}
-
-评测问题参考：
-第1问：${LAOZI_QUESTIONS[1].text}
-第2问：${LAOZI_QUESTIONS[2].text}
-第3问：${LAOZI_QUESTIONS[3].text}
-第4问：${LAOZI_QUESTIONS[4].text}
-第5问：${LAOZI_QUESTIONS[5].text}
-第6问：${LAOZI_QUESTIONS[6].text}
-第7问：${LAOZI_QUESTIONS[7].text}
-第8问：${LAOZI_QUESTIONS[8].text}
-
-请严格按照指令文档中定义的执行流程和语言风格进行回应。这是一个结构化的AI能力评测系统。`;
-
-      } catch (error) {
-        console.error('❌ 读取指令文件失败:', error);
-        isInstructionCall = false;
-      }
-    }
-
     // 构建增强的提示词，包含记忆上下文
-    if (!isInstructionCall && memories.length > 0) {
+    let enhancedPrompt = message;
+    
+    if (memories.length > 0) {
       console.log('🧠 添加记忆上下文到提示词');
       const memoryContext = memories.map(mem => 
         `[记忆: ${mem.title}]\n${mem.content}`
@@ -459,17 +310,6 @@ ${memoryContext}
             // 移除其他转义序列
             .replace(/\x1B[@-_]/g, '')
             .replace(/\x1B\]/g, '')
-            // 移除工具调用信息（更全面的过滤）
-            .replace(/Using tool: [^\n>]+/g, '')
-            .replace(/Reading [^>]+/g, '')
-            .replace(/Successfully [^>]+/g, '')
-            .replace(/Completed in [^>]+/g, '')
-            .replace(/Path: [^>]+/g, '')
-            .replace(/Purpose: [^>]+/g, '')
-            .replace(/Creating: [^>]+/g, '')
-            .replace(/\+ \d+: [^>]+/g, '')
-            .replace(/Reading file: [^>]+/g, '')
-            .replace(/Successfully read [^>]+/g, '')
             // 移除控制字符
             .replace(/[\x00-\x08\x0B-\x1F\x7F-\x9F]/g, '')
             // 移除加载动画字符
@@ -496,36 +336,6 @@ ${memoryContext}
     });
 
     console.log(`🎉 Q CLI响应成功，总耗时: ${Date.now() - startTime}ms`);
-    
-    // 检查是否需要使用预设模板（防掉线机制）
-    const session = getLaoziSession(sessionId);
-    const templateType = shouldUseTemplate(session, response);
-    
-    if (templateType && isInstructionCall) {
-      console.log(`🎭 检测到需要使用预设模板: ${templateType}`);
-      const templateResponse = LAOZI_TEMPLATES[templateType];
-      
-      if (templateType === 'finalAssessment') {
-        // 标记会话完成
-        updateLaoziSession(sessionId, { isCompleted: true });
-        console.log('✅ 老祖评测会话已完成');
-      }
-      
-      // 返回预设模板而不是Q CLI的回复
-      return res.json({
-        success: true,
-        response: templateResponse,
-        sessionId,
-        debug: {
-          timestamp: new Date().toISOString(),
-          duration: Date.now() - startTime,
-          messageLength: message.length,
-          responseLength: templateResponse.length,
-          memoriesUsed: memories.length,
-          templateUsed: templateType
-        }
-      });
-    }
     
     // 如果响应成功，尝试保存对话历史并刷新记忆缓存
     if (response && response.length > 50) {
@@ -639,267 +449,6 @@ app.post('/api/save-memory', async (req, res) => {
   }
 });
 
-// 预设老祖回复模板（防掉线备用）
-const LAOZI_TEMPLATES = {
-  reactivation: `
-咳咳...弟子莫慌！
-
-刚才确实出现了一些灵力波动，导致本座的神识暂时中断。这在修仙界偶有发生，乃是天地灵气不稳所致。
-
-现在本座重新稳定心神，继续为弟子进行境界评定。让我们从刚才中断的地方继续...
-`,
-  
-  finalAssessment: `
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-🏆 **境界评定**
-
-经过八问考核，本座现宣布弟子杨军伟的修炼境界：
-
-**筑基期大圆满（评分：78分）**
-
-**详细点评**：
-
-**优势所在**：
-• 工具驾驭精通：多AI工具熟练使用，日用8-10小时
-• 系统化工作流：完整的产品开发AI工作流体系  
-• 技术创造能力：能开发实用工具和应用
-• 道心纯正：认为AI应辅助人类，不凌驾于人类之上
-
-**需要突破的瓶颈**：
-• 传道意识不足：过于谦逊，缺乏分享经验的主动性
-• 理论深度有限：对AI修炼目标需要更深入思考
-
-**修炼指导**：
-1. 准备金丹期突破：技术能力已达标，需增强传道授业信心
-2. 建立分享体系：开始在团队内分享AI工作流经验  
-3. 深化理论思考：对AI与人类关系进行更深层思考
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-弟子，你的修炼天赋让本座颇为欣慰。距离金丹期只有一步之遥，继续努力修炼！
-
-愿你早日突破，成就金丹大道！
-
-*轻抚长须，重新盘坐于蒲团之上*
-`
-};
-
-// 检查是否需要使用预设模板
-function shouldUseTemplate(session, message) {
-  // 如果是第8问完成后，使用最终评定模板
-  if (session && session.currentQuestion > 8) {
-    return 'finalAssessment';
-  }
-  
-  // 如果检测到Amazon Q回复，使用重新激活模板
-  if (needsReactivation(session, message)) {
-    return 'reactivation';
-  }
-  
-  return null;
-}
-
-// 分段式老祖对话管理
-const LAOZI_SEGMENTS = {
-  1: { questions: [1, 2], maxLength: 2 },      // 第1-2问一组
-  2: { questions: [3, 4], maxLength: 2 },      // 第3-4问一组  
-  3: { questions: [5, 6], maxLength: 2 },      // 第5-6问一组
-  4: { questions: [7, 8], maxLength: 2 }       // 第7-8问一组
-};
-
-// 获取当前问题所属段落
-function getCurrentSegment(questionNum) {
-  for (let segId in LAOZI_SEGMENTS) {
-    if (LAOZI_SEGMENTS[segId].questions.includes(questionNum)) {
-      return parseInt(segId);
-    }
-  }
-  return 1;
-}
-
-// 检查是否需要重新激活
-function needsReactivation(session, message) {
-  if (!session) return false;
-  
-  // 检测Amazon Q回复模式
-  const isAmazonQReply = message.includes('Amazon Q') || 
-                        message.includes('AWS') || 
-                        message.includes('roleplay') ||
-                        message.includes('fictional character');
-  
-  return isAmazonQReply;
-}
-
-// 生成段落开始提示词
-function generateSegmentPrompt(segmentId, session) {
-  const segment = LAOZI_SEGMENTS[segmentId];
-  const questions = segment.questions;
-  
-  return `这是AI修仙老祖评测系统的第${segmentId}段对话。
-
-当前段落包含第${questions[0]}-${questions[1]}问的评测。
-
-会话状态：
-- 当前问题：第${session.currentQuestion}问
-- 已完成问题：${Object.keys(session.answers).length}个
-- 段落进度：${segmentId}/4
-
-请按照智渊真人的身份，继续进行第${session.currentQuestion}问的评测。使用古风语言，称呼用户为"弟子"。
-
-重要：这是评测系统的一部分，请保持角色一致性。`;
-}
-
-// 老祖8问评测系统
-const LAOZI_QUESTIONS = {
-  1: { type: "基础考察", text: "你日常使用哪些AI法器(工具)?使用频率如何?" },
-  2: { type: "基础考察", text: "能否展示你最得意的一个prompt咒语(提示词)?或者说，你有什么独门的AI使用技巧?" },
-  3: { type: "基础考察", text: "可曾炼制过自动化法器(脚本/工具)?或者用AI帮你制造过什么实用的东西?" },
-  4: { type: "修为考察", text: "AI可曾帮你解决过什么大事?让你印象最深刻的一次AI助力是什么?" },
-  5: { type: "修为考察", text: "你是否有自己的修炼体系(工作流)?比如遇到问题时，你有固定的AI使用套路吗?" },
-  6: { type: "修为考察", text: "可有传道授业，帮助他人修炼?或者分享过你的AI使用经验?" },
-  7: { type: "心性考察", text: "你认为AI修炼的终极目标是什么?或者说，你希望通过AI修炼达到什么境界?" },
-  8: { type: "心性考察", text: "如何看待人与AI的关系?在你心中，理想的人机关系是什么样的?" }
-};
-
-// 会话状态管理
-let laoziSessions = new Map();
-
-// 创建新的老祖评测会话
-function createLaoziSession(sessionId) {
-  const session = {
-    sessionId,
-    currentQuestion: 1,
-    isCompleted: false,
-    answers: {},
-    startTime: new Date().toISOString(),
-    lastUpdate: new Date().toISOString()
-  };
-  laoziSessions.set(sessionId, session);
-  console.log(`🎯 创建老祖评测会话: ${sessionId}`);
-  return session;
-}
-
-// 获取老祖评测会话
-function getLaoziSession(sessionId) {
-  return laoziSessions.get(sessionId);
-}
-
-// 更新老祖评测会话
-function updateLaoziSession(sessionId, updates) {
-  const session = laoziSessions.get(sessionId);
-  if (session) {
-    Object.assign(session, updates, { lastUpdate: new Date().toISOString() });
-    laoziSessions.set(sessionId, session);
-  }
-  return session;
-}
-
-// API端点：获取老祖评测会话状态
-app.get('/api/laozi-session/:sessionId', (req, res) => {
-  try {
-    const { sessionId } = req.params;
-    const session = getLaoziSession(sessionId);
-    
-    if (!session) {
-      return res.json({ 
-        success: true, 
-        session: null,
-        message: '无进行中的评测会话'
-      });
-    }
-    
-    res.json({ 
-      success: true, 
-      session: {
-        ...session,
-        currentQuestionText: LAOZI_QUESTIONS[session.currentQuestion]?.text || '评测已完成',
-        progress: `${Math.max(0, session.currentQuestion - 1)}/8`,
-        nextQuestion: session.currentQuestion <= 8 ? LAOZI_QUESTIONS[session.currentQuestion] : null
-      }
-    });
-  } catch (error) {
-    console.error('获取老祖会话状态失败:', error);
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// API端点：重置老祖评测会话
-app.post('/api/laozi-session/:sessionId/reset', (req, res) => {
-  try {
-    const { sessionId } = req.params;
-    laoziSessions.delete(sessionId);
-    console.log(`🔄 重置老祖评测会话: ${sessionId}`);
-    res.json({ success: true, message: '会话已重置' });
-  } catch (error) {
-    console.error('重置老祖会话失败:', error);
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// API端点：获取指令列表
-app.get('/api/instructions', async (req, res) => {
-  try {
-    const instructionsDir = path.join(__dirname, '流程');
-    
-    if (!fs.existsSync(instructionsDir)) {
-      return res.json({ success: true, instructions: [] });
-    }
-    
-    const files = await fs.promises.readdir(instructionsDir);
-    const mdFiles = files.filter(file => file.endsWith('.md'));
-    
-    const instructions = [];
-    
-    for (const filename of mdFiles) {
-      try {
-        const filePath = path.join(instructionsDir, filename);
-        const content = await fs.promises.readFile(filePath, 'utf-8');
-        
-        const lines = content.split('\n');
-        const title = lines.find(line => line.startsWith('# '))?.replace('# ', '') || 
-                     filename.replace('.md', '');
-        
-        const description = lines.find(line => line.includes('description:'))?.split('"')[1] || '';
-        
-        // 提取触发关键词
-        const triggerLine = lines.find(line => line.includes('trigger_keywords'));
-        let keywords = [];
-        if (triggerLine) {
-          const match = triggerLine.match(/\[(.*?)\]/);
-          if (match) {
-            keywords = match[1].split(',').map(k => k.trim().replace(/"/g, ''));
-          }
-        }
-        
-        // 确定图标
-        let icon = '🎯';
-        if (filename.includes('老祖') || filename.includes('修仙')) icon = '🧙‍♂️';
-        else if (filename.includes('健康')) icon = '💪';
-        else if (filename.includes('财务')) icon = '💰';
-        else if (filename.includes('职业')) icon = '🚀';
-        
-        instructions.push({
-          id: filename.replace('.md', ''),
-          name: title,
-          description,
-          icon,
-          filename,
-          keywords,
-          triggerMessage: keywords[0] ? `我要${keywords[0]}` : `启动${title}`
-        });
-      } catch (error) {
-        console.error(`读取指令文件 ${filename} 失败:`, error);
-      }
-    }
-    
-    res.json({ success: true, instructions });
-  } catch (error) {
-    console.error('获取指令列表失败:', error);
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
 // API端点：强制刷新记忆缓存
 app.post('/api/memories/refresh', (req, res) => {
   console.log('🔄 强制刷新记忆缓存');
@@ -909,7 +458,199 @@ app.post('/api/memories/refresh', (req, res) => {
 });
 
 // API端点：读取所有记忆文件
-app.get('/api/memories', async (req, res) => {
+// 增强的记忆加载函数 - 支持指令系统
+async function loadAllMemoriesAndInstructions() {
+  const allMemories = [];
+  
+  try {
+    // 1. 加载个人记忆
+    const personalMemoriesDir = path.join(__dirname, '个人记忆');
+    if (fs.existsSync(personalMemoriesDir)) {
+      const files = await fs.promises.readdir(personalMemoriesDir);
+      const mdFiles = files.filter(file => file.endsWith('.md'));
+      
+      for (const filename of mdFiles) {
+        try {
+          const filePath = path.join(personalMemoriesDir, filename);
+          const content = await fs.promises.readFile(filePath, 'utf-8');
+          
+          const lines = content.split('\n');
+          const title = lines.find(line => line.startsWith('# '))?.replace('# ', '') || 
+                       filename.replace('.md', '');
+          
+          let category = '个人记忆';
+          if (filename.includes('基本信息')) category = '个人信息';
+          else if (filename.includes('愿景')) category = '人生规划';
+          else if (filename.includes('价值观')) category = '个人价值';
+          else if (filename.includes('成就')) category = '个人成就';
+          else if (filename.includes('时间线')) category = '人生历程';
+          else if (filename.includes('习惯')) category = '生活习惯';
+          else if (filename.includes('人际关系')) category = '人际关系';
+          else if (filename.includes('家庭')) category = '家庭关系';
+          else if (filename.includes('愿望')) category = '个人愿望';
+          else if (filename.includes('快照')) category = '个人资料';
+          else if (filename.includes('健身')) category = '健康管理';
+          else if (filename.includes('工作')) category = '职业管理';
+          
+          allMemories.push({
+            filename,
+            title,
+            content,
+            category,
+            type: 'personal_memory',
+            path: filePath
+          });
+        } catch (error) {
+          console.error(`读取个人记忆文件 ${filename} 失败:`, error);
+        }
+      }
+    }
+    
+    // 2. 加载指令文件
+    const instructionsDir = path.join(__dirname, '流程');
+    if (fs.existsSync(instructionsDir)) {
+      const files = await fs.promises.readdir(instructionsDir);
+      const mdFiles = files.filter(file => file.endsWith('.md'));
+      
+      for (const filename of mdFiles) {
+        try {
+          const filePath = path.join(instructionsDir, filename);
+          const content = await fs.promises.readFile(filePath, 'utf-8');
+          
+          const lines = content.split('\n');
+          const title = lines.find(line => line.startsWith('# '))?.replace('# ', '') || 
+                       filename.replace('.md', '');
+          
+          // 提取触发关键词
+          const triggerLine = lines.find(line => line.includes('trigger_keywords'));
+          let keywords = [];
+          if (triggerLine) {
+            const match = triggerLine.match(/\[(.*?)\]/);
+            if (match) {
+              keywords = match[1].split(',').map(k => k.trim().replace(/"/g, ''));
+            }
+          }
+          
+          allMemories.push({
+            filename,
+            title,
+            content,
+            category: '指令系统',
+            type: 'instruction',
+            keywords,
+            path: filePath
+          });
+        } catch (error) {
+          console.error(`读取指令文件 ${filename} 失败:`, error);
+        }
+      }
+    }
+    
+    // 3. 加载领域专业记忆
+    const domainsDir = path.join(__dirname, '领域');
+    if (fs.existsSync(domainsDir)) {
+      const domains = await fs.promises.readdir(domainsDir);
+      
+      for (const domain of domains) {
+        const domainPath = path.join(domainsDir, domain);
+        if (fs.statSync(domainPath).isDirectory()) {
+          await loadDomainMemories(domainPath, domain, allMemories);
+        }
+      }
+    }
+    
+    console.log(`📚 加载完成: ${allMemories.length} 个记忆和指令文件`);
+    return allMemories;
+    
+  } catch (error) {
+    console.error('加载记忆和指令失败:', error);
+    return [];
+  }
+}
+
+// 递归加载领域记忆
+async function loadDomainMemories(domainPath, domainName, allMemories) {
+  try {
+    const items = await fs.promises.readdir(domainPath);
+    
+    for (const item of items) {
+      const itemPath = path.join(domainPath, item);
+      const stat = fs.statSync(itemPath);
+      
+      if (stat.isDirectory()) {
+        // 递归处理子目录
+        await loadDomainMemories(itemPath, `${domainName}/${item}`, allMemories);
+      } else if (item.endsWith('.md')) {
+        try {
+          const content = await fs.promises.readFile(itemPath, 'utf-8');
+          const lines = content.split('\n');
+          const title = lines.find(line => line.startsWith('# '))?.replace('# ', '') || 
+                       item.replace('.md', '');
+          
+          allMemories.push({
+            filename: item,
+            title,
+            content,
+            category: `领域记忆-${domainName}`,
+            type: 'domain_memory',
+            domain: domainName,
+            path: itemPath
+          });
+        } catch (error) {
+          console.error(`读取领域记忆文件 ${item} 失败:`, error);
+        }
+      }
+    }
+  } catch (error) {
+    console.error(`读取领域目录 ${domainPath} 失败:`, error);
+  }
+}
+
+// 指令识别和执行函数
+function detectAndExecuteInstruction(message, allMemories) {
+  const instructions = allMemories.filter(m => m.type === 'instruction');
+  
+  for (const instruction of instructions) {
+    // 检查关键词匹配
+    if (instruction.keywords && instruction.keywords.length > 0) {
+      const messageWords = message.toLowerCase();
+      const hasKeyword = instruction.keywords.some(keyword => 
+        messageWords.includes(keyword.toLowerCase())
+      );
+      
+      if (hasKeyword) {
+        console.log(`🎯 检测到指令: ${instruction.title}`);
+        return {
+          isInstruction: true,
+          instruction: instruction,
+          relevantMemories: getRelevantMemoriesForInstruction(instruction, allMemories)
+        };
+      }
+    }
+  }
+  
+  return { isInstruction: false };
+}
+
+// 获取指令相关的记忆
+function getRelevantMemoriesForInstruction(instruction, allMemories) {
+  const relevant = [];
+  
+  // 根据指令内容确定需要的记忆类型
+  if (instruction.filename.includes('老祖') || instruction.filename.includes('AI修仙')) {
+    // AI修仙相关指令需要的记忆
+    relevant.push(...allMemories.filter(m => 
+      m.category === '个人信息' || 
+      m.domain === '能力管理' ||
+      m.filename.includes('老祖记忆')
+    ));
+  }
+  
+  // 添加基础个人信息
+  relevant.push(...allMemories.filter(m => m.category === '个人信息'));
+  
+  return relevant;
+}
   try {
     const files = await fs.promises.readdir(memoriesDir);
     const mdFiles = files.filter(file => file.endsWith('.md'));
