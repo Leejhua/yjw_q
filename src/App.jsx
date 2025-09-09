@@ -65,6 +65,27 @@ function App() {
   const [selectedMemories, setSelectedMemories] = useState([]);
   const [hasLoadedFiles, setHasLoadedFiles] = useState(false);
 
+  // 检查Q CLI状态
+  const checkQCliStatus = async () => {
+    try {
+      const response = await fetch('http://localhost:3001/api/q-status');
+      if (response.ok) {
+        const status = await response.json();
+        setQCliStatus(status);
+        return status.available;
+      }
+    } catch (error) {
+      console.error('检查Q CLI状态失败:', error);
+      setQCliStatus({ available: false, sessions: 0 });
+    }
+    return false;
+  };
+
+  // 组件加载时检查Q CLI状态
+  useEffect(() => {
+    checkQCliStatus();
+  }, []);
+
   // 从后端API加载记忆文件
   useEffect(() => {
     const loadPersonalMemories = async () => {
@@ -92,6 +113,8 @@ function App() {
   }, []);
   const [workflows, setWorkflows] = useState([]); // 完全空白，不读取任何存储
   const [apiKey, setApiKey] = useState(""); // 完全空白，不读取任何存储
+  const [aiService, setAiService] = useState("deepseek"); // AI服务选择：deepseek 或 qcli
+  const [qCliStatus, setQCliStatus] = useState({ available: false, sessions: 0 });
 
   // 添加清除所有记忆数据的功能
   const clearAllMemories = () => {
@@ -712,10 +735,67 @@ function App() {
     setLogs((prev) => [newLog, ...prev.slice(0, 19)]); // 保持最多20条日志，提供完整操作记录
   };
 
-  // 生成AI回复
+  // Q CLI对话函数
+  const chatWithQCli = async (userMessage, messageHistory) => {
+    try {
+      const response = await fetch('http://localhost:3001/api/chat-with-q', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          message: userMessage,
+          sessionId: 'default'
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Q CLI调用失败');
+      }
+
+      const data = await response.json();
+      return data.response;
+    } catch (error) {
+      console.error('Q CLI对话错误:', error);
+      throw error;
+    }
+  };
+
+  // 生成AI回复（支持多种AI服务）
   const generateAIResponse = async (userMessage, relevantMemories) => {
     addLog("info", "开始生成AI回复", userMessage);
 
+    // 根据选择的AI服务进行处理
+    if (aiService === "qcli") {
+      // 检查Q CLI是否可用
+      const isAvailable = await checkQCliStatus();
+      if (!isAvailable) {
+        // Q CLI不可用时自动切换到DeepSeek
+        addLog("warning", "Q CLI不可用，自动切换到DeepSeek", "");
+        if (!apiKey.trim()) {
+          throw new Error("Q CLI不可用且DeepSeek API密钥未配置，请在设置中配置API密钥或安装Q CLI");
+        }
+        return await chatWithDeepSeek(userMessage, relevantMemories);
+      }
+      
+      try {
+        return await chatWithQCli(userMessage, []);
+      } catch (error) {
+        addLog("error", "Q CLI调用失败，尝试切换到DeepSeek", error.message);
+        if (!apiKey.trim()) {
+          throw new Error("Q CLI调用失败且DeepSeek API密钥未配置");
+        }
+        return await chatWithDeepSeek(userMessage, relevantMemories);
+      }
+    } else {
+      // 使用DeepSeek
+      return await chatWithDeepSeek(userMessage, relevantMemories);
+    }
+  };
+
+  // DeepSeek对话函数
+  const chatWithDeepSeek = async (userMessage, relevantMemories) => {
     if (!apiKey.trim()) {
       throw new Error("请先配置DeepSeek API密钥");
     }
@@ -882,7 +962,20 @@ ${context}
     return (
       <div style={{ height: "100vh", display: "flex", flexDirection: "column" }}>
         <div data-chat-scroll-container style={{ flex: 1, overflow: "auto", padding: 24 }}>
-          <Card title="AI私人助理" style={{ marginBottom: 16 }}>
+          <Card 
+            title={
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span>AI私人助理</span>
+                <Tag color={aiService === 'qcli' ? (qCliStatus.available ? 'green' : 'red') : 'blue'}>
+                  {aiService === 'qcli' ? 
+                    (qCliStatus.available ? 'Q CLI' : 'Q CLI (不可用)') : 
+                    'DeepSeek'
+                  }
+                </Tag>
+              </div>
+            } 
+            style={{ marginBottom: 16 }}
+          >
             <Text type="secondary">
               我是您的私人AI助理，可以帮助您管理记忆、执行指令、回答各种问题。
               {memories.length > 0 && (
@@ -1889,7 +1982,43 @@ ${context}
       <div style={{ padding: 24, height: "100vh", overflow: "auto" }}>
         <Card title="系统设置">
           <Form layout="vertical">
-            <Form.Item label="DeepSeek API密钥">
+            <Form.Item label="AI服务选择">
+              <Select
+                value={aiService}
+                onChange={(value) => setAiService(value)}
+                style={{ width: '100%' }}
+              >
+                <Option value="deepseek">DeepSeek API</Option>
+                <Option value="qcli">Amazon Q CLI</Option>
+              </Select>
+              <div style={{ color: "#666", fontSize: 12, marginTop: 4 }}>
+                {aiService === 'qcli' ? (
+                  <div>
+                    <div>Q CLI状态: {qCliStatus.available ? '✅ 可用' : '❌ 不可用'}</div>
+                    {qCliStatus.available && <div>活跃会话: {qCliStatus.sessions}</div>}
+                    {!qCliStatus.available && <div>请确保已安装并配置Amazon Q CLI</div>}
+                  </div>
+                ) : (
+                  <div>使用DeepSeek API进行对话，需要配置API密钥</div>
+                )}
+              </div>
+              <div style={{ marginTop: 8 }}>
+                <Button
+                  type="default"
+                  size="small"
+                  onClick={checkQCliStatus}
+                >
+                  检查Q CLI状态
+                </Button>
+              </div>
+            </Form.Item>
+            
+            <Form.Item label="DeepSeek API密钥"
+              style={{ 
+                opacity: aiService === 'deepseek' ? 1 : 0.5,
+                pointerEvents: aiService === 'deepseek' ? 'auto' : 'none'
+              }}
+            >
               <Input.Password
                 value={apiKey}
                 onChange={(e) => setApiKey(e.target.value)}
