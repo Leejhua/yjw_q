@@ -55,6 +55,7 @@ function App() {
   const [currentTab, setCurrentTab] = useState("chat");
   const [logs, setLogs] = useState([]);
   const [messages, setMessages] = useState([]);
+  const [chatScrollPosition, setChatScrollPosition] = useState(0); // 保存聊天页面滚动位置
   const [memories, setMemories] = useState([]);
   const [selectedMemories, setSelectedMemories] = useState([]);
   const [workflows, setWorkflows] = useState([]);
@@ -135,23 +136,66 @@ function App() {
     }
   };
 
-  // 滚动到底部
-  const scrollToBottom = () => {
-    if (currentTab !== 'chat') return;
-    
-    requestAnimationFrame(() => {
-      const scrollContainer = document.querySelector('[data-chat-scroll-container]');
-      if (scrollContainer) {
-        scrollContainer.scrollTop = scrollContainer.scrollHeight;
-      }
-    });
+  // 保存和恢复聊天滚动位置
+  const saveChatScrollPosition = () => {
+    const scrollContainer = document.querySelector('[data-chat-scroll-container]');
+    if (scrollContainer) {
+      setChatScrollPosition(scrollContainer.scrollTop);
+    }
   };
 
+  const restoreChatScrollPosition = () => {
+    const scrollContainer = document.querySelector('[data-chat-scroll-container]');
+    if (scrollContainer) {
+      // 直接恢复到离开时的位置，不使用动画
+      scrollContainer.scrollTop = chatScrollPosition;
+    }
+  };
+
+  // 监听页面切换 - 只负责恢复位置
+  useEffect(() => {
+    if (currentTab === 'chat') {
+      // 立即恢复滚动位置，无延迟
+      restoreChatScrollPosition();
+    }
+  }, [currentTab]);
+
+  // 智能滚动到底部 - 聊天应用的默认行为
+  const scrollToBottom = (force = false) => {
+    if (currentTab !== 'chat') return;
+    
+    const scrollContainer = document.querySelector('[data-chat-scroll-container]');
+    if (!scrollContainer) return;
+    
+    // 检查用户是否在明显查看历史消息（距离底部超过200px）
+    const distanceFromBottom = scrollContainer.scrollHeight - scrollContainer.scrollTop - scrollContainer.clientHeight;
+    const isViewingHistory = distanceFromBottom > 200;
+    
+    // 强制滚动或用户不在查看历史时才滚动
+    if (force || !isViewingHistory) {
+      scrollContainer.scrollTo({
+        top: scrollContainer.scrollHeight,
+        behavior: 'smooth'
+      });
+    }
+  };
+
+  // 监听消息变化 - 只在有新消息且当前在聊天页面时滚动
   useEffect(() => {
     if (currentTab === 'chat' && messages.length > 0) {
-      scrollToBottom();
+      // 检查是否是真正的新消息（避免页面切换时触发）
+      const lastMessage = messages[messages.length - 1];
+      const now = new Date();
+      const messageTime = new Date(lastMessage.timestamp);
+      const isRecentMessage = (now - messageTime) < 2000; // 2秒内的消息
+      
+      if (isRecentMessage) {
+        // 只有真正的新消息才滚动
+        setTimeout(() => scrollToBottom(false), 100);
+        // 不重置保存的滚动位置，让页面切换逻辑独立处理
+      }
     }
-  }, [messages, currentTab]);
+  }, [messages]);
 
   // 处理发送消息
   const handleSendMessage = async (text) => {
@@ -165,6 +209,9 @@ function App() {
     };
 
     setMessages(prev => [...prev, userMessage]);
+    
+    // 发送用户消息后平滑滚动到底部
+    setTimeout(() => scrollToBottom(true), 100);
 
     const loadingMessage = {
       id: Date.now() + 1,
@@ -174,23 +221,34 @@ function App() {
       loading: true,
     };
     setMessages(prev => [...prev, loadingMessage]);
+    
+    // 显示loading消息后平滑滚动到底部
+    setTimeout(() => scrollToBottom(true), 150);
 
     try {
       const relevantMemories = findRelevantMemories(text);
-      const aiResponse = await generateAIResponse(text, relevantMemories);
+      const result = await generateAIResponse(text, relevantMemories);
 
       setMessages(prev =>
         prev.map(msg =>
           msg.id === loadingMessage.id
-            ? { ...msg, content: aiResponse, loading: false, references: relevantMemories }
+            ? { 
+                ...msg, 
+                content: result.response, 
+                loading: false, 
+                references: result.actuallyUsedMemories // 使用实际使用的记忆
+              }
             : msg
         )
       );
+      
+      // AI回复完成后滚动到最新消息
+      setTimeout(() => scrollToBottom(false), 150);
 
       // 检测老祖会话状态变化
-      if (aiResponse.includes('AI修仙老祖评测已完成')) {
+      if (result.response.includes('AI修仙老祖评测已完成')) {
         setLaoziSession(null);
-      } else if (aiResponse.includes('老祖') || aiResponse.includes('弟子')) {
+      } else if (result.response.includes('老祖') || result.response.includes('弟子')) {
         loadLaoziSession();
       }
     } catch (error) {
@@ -246,7 +304,8 @@ function App() {
       throw new Error("Amazon Q CLI不可用，请确保已正确安装和配置");
     }
     
-    return await chatWithQCli(userMessage, relevantMemories);
+    const result = await chatWithQCli(userMessage, relevantMemories);
+    return result; // 返回包含response和actuallyUsedMemories的对象
   };
 
   // Q CLI对话
@@ -283,7 +342,11 @@ function App() {
         }
       }
       
-      return data.response;
+      // 返回完整数据，包括实际使用的记忆
+      return {
+        response: data.response,
+        actuallyUsedMemories: data.actuallyUsedMemories || []
+      };
     } catch (error) {
       console.error('Q CLI对话错误:', error);
       throw error;
@@ -302,9 +365,23 @@ function App() {
     setLogs(prev => [newLog, ...prev.slice(0, 19)]);
   };
 
+  // 切换到聊天页面的函数
+  const switchToChat = () => {
+    setCurrentTab("chat");
+  };
+
+  // 切换到其他页面的函数
+  const switchToOtherTab = (tabName) => {
+    // 如果当前在聊天页面，先保存滚动位置
+    if (currentTab === 'chat') {
+      saveChatScrollPosition();
+    }
+    setCurrentTab(tabName);
+  };
+
   // 执行指令
   const executeInstruction = (instruction) => {
-    setCurrentTab("chat");
+    switchToChat();
     setTimeout(() => {
       handleSendMessage(instruction.triggerMessage);
     }, 200);
@@ -314,15 +391,23 @@ function App() {
   // 退出老祖模式
   const exitLaoziMode = async () => {
     try {
-      setCurrentTab("chat");
-      setTimeout(() => {
-        handleSendMessage("退出老祖");
-        setTimeout(() => setLaoziSession(null), 1000);
-      }, 200);
-      message.success('正在退出老祖模式...');
+      // 1. 立即清除前端状态
+      setLaoziSession(null);
+      
+      // 2. 调用后端API清除会话
+      await fetch('http://localhost:3001/api/laozi-session/default/reset', {
+        method: 'POST'
+      });
+      
+      // 3. 发送退出消息确保后端状态同步
+      handleSendMessage("退出老祖");
+      
+      message.success('已退出老祖模式');
     } catch (error) {
       console.error('退出老祖模式失败:', error);
-      message.error('退出失败');
+      // 即使API调用失败，也清除前端状态
+      setLaoziSession(null);
+      message.success('已退出老祖模式');
     }
   };
 
@@ -349,16 +434,9 @@ function App() {
 
     return (
       <div style={{ height: "100vh", display: "flex", flexDirection: "column" }}>
-        <div 
-          data-chat-scroll-container 
-          style={{ 
-            flex: 1,
-            overflow: "auto", 
-            padding: 24,
-            scrollBehavior: "smooth"
-          }}
-        >
-          {laoziSession && !laoziSession.isCompleted && (
+        {/* 固定的老祖提示框 - 不参与滚动 */}
+        {laoziSession && !laoziSession.isCompleted && (
+          <div style={{ padding: "16px 24px 0 24px" }}>
             <Alert
               message="🧙♂️ 老祖评测模式进行中"
               description={`当前进度：第${laoziSession.currentQuestion}问 (${laoziSession.progress})`}
@@ -367,8 +445,19 @@ function App() {
               style={{ marginBottom: 16 }}
               action={<Button size="small" onClick={exitLaoziMode}>退出</Button>}
             />
-          )}
-          
+          </div>
+        )}
+        
+        <div 
+          data-chat-scroll-container 
+          style={{ 
+            flex: 1,
+            overflow: "auto", 
+            padding: 24,
+            scrollBehavior: "auto", // 移除平滑滚动，使用瞬间定位
+            overflowAnchor: "auto" // 防止滚动锚点问题
+          }}
+        >
           <Card 
             title={
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -392,10 +481,12 @@ function App() {
 
           <List
             dataSource={messages}
+            split={false} // 移除分割线，减少重绘
             renderItem={(message) => (
               <List.Item
+                key={message.id} // 稳定的key避免重新渲染
                 style={{
-                  padding: "12px 0",
+                  padding: "24px 20px",
                   borderBottom: "none",
                   display: "flex",
                   justifyContent: message.type === "user" ? "flex-end" : "flex-start",
@@ -403,28 +494,87 @@ function App() {
               >
                 <div
                   style={{
-                    maxWidth: "70%",
-                    padding: "12px 16px",
-                    borderRadius: 12,
-                    backgroundColor: message.type === "user" ? "#1890ff" : "#f0f0f0",
-                    color: message.type === "user" ? "white" : "black",
+                    maxWidth: "75%",
+                    padding: "16px 20px",
+                    borderRadius: message.type === "user" ? "20px 20px 4px 20px" : "20px 20px 20px 4px",
+                    backgroundColor: message.type === "user" 
+                      ? "#667eea" 
+                      : "#ffffff",
+                    color: message.type === "user" ? "white" : "#333333",
                     whiteSpace: "pre-wrap",
+                    lineHeight: "1.6",
+                    fontSize: "15px",
+                    boxShadow: message.type === "user" 
+                      ? "0 4px 12px rgba(102, 126, 234, 0.3)" 
+                      : "0 4px 12px rgba(0, 0, 0, 0.1)",
+                    border: message.type === "user" ? "none" : "1px solid #f0f0f0",
+                    position: "relative"
                   }}
                 >
+                  {/* 消息尾巴 */}
+                  <div style={{
+                    position: "absolute",
+                    bottom: "12px",
+                    [message.type === "user" ? "right" : "left"]: "-6px",
+                    width: "0",
+                    height: "0",
+                    borderStyle: "solid",
+                    borderWidth: message.type === "user" 
+                      ? "6px 0 6px 6px" 
+                      : "6px 6px 6px 0",
+                    borderColor: message.type === "user" 
+                      ? "transparent transparent transparent #667eea" 
+                      : "transparent #ffffff transparent transparent"
+                  }} />
+                  
                   {message.loading ? (
-                    <Spin indicator={<LoadingOutlined spin />} />
+                    <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                      <Spin 
+                        indicator={<LoadingOutlined spin />} 
+                        style={{ color: message.type === "user" ? "white" : "#1890ff" }}
+                      />
+                      <span style={{ 
+                        fontSize: "14px",
+                        fontStyle: "italic",
+                        opacity: 0.8
+                      }}>
+                        AI正在思考中...
+                      </span>
+                    </div>
                   ) : (
                     <div>
-                      {message.content}
+                      <div style={{ marginBottom: message.references ? 12 : 0 }}>
+                        {message.type === "user" ? (
+                          message.content
+                        ) : (
+                          <div style={{ lineHeight: '1.5', fontSize: '14px' }}>
+                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                              {message.content}
+                            </ReactMarkdown>
+                          </div>
+                        )}
+                      </div>
                       {message.references && message.references.length > 0 && (
-                        <div style={{ marginTop: 8, fontSize: 12, opacity: 0.7 }}>
-                          <strong>相关记忆：</strong>
+                        <div style={{ 
+                          marginTop: 12, 
+                          paddingTop: 12,
+                          borderTop: "1px solid rgba(255,255,255,0.2)",
+                          fontSize: 12, 
+                          opacity: 0.8
+                        }}>
+                          <strong>📚 相关记忆：</strong>
                           {message.references.map((ref) => ref.category).join(", ")}
                         </div>
                       )}
                     </div>
                   )}
-                  <div style={{ fontSize: 11, opacity: 0.6, marginTop: 4 }}>
+                  <div style={{ 
+                    fontSize: 11, 
+                    opacity: 0.6, 
+                    marginTop: 8,
+                    textAlign: message.type === "user" ? "right" : "left",
+                    fontStyle: "italic"
+                  }}>
                     {new Date(message.timestamp).toLocaleString("zh-CN")}
                   </div>
                 </div>
@@ -433,24 +583,55 @@ function App() {
           />
         </div>
 
-        <div style={{ padding: 16, borderTop: "1px solid #f0f0f0" }}>
-          <div style={{ display: "flex", gap: 8 }}>
+        <div style={{ 
+          padding: "20px 24px", 
+          borderTop: "2px solid #f0f0f0",
+          background: "#fafafa",
+          boxShadow: "0 -4px 12px rgba(0,0,0,0.05)"
+        }}>
+          <div style={{ display: "flex", gap: 12, alignItems: "flex-end" }}>
             <Input.TextArea
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="输入消息，按 Enter 发送，Shift+Enter 换行..."
+              placeholder="💬 输入您的问题，我来为您解答..."
               autoSize={{ minRows: 1, maxRows: 4 }}
-              style={{ flex: 1 }}
+              style={{
+                flex: 1,
+                borderRadius: "16px",
+                border: "2px solid #e6f7ff",
+                fontSize: "15px",
+                padding: "12px 16px",
+                boxShadow: "0 2px 8px rgba(0,0,0,0.05)",
+                transition: "all 0.3s ease"
+              }}
             />
             <Button
               type="primary"
               icon={<SendOutlined />}
               onClick={handleSend}
               disabled={!inputText.trim()}
+              style={{
+                height: "48px",
+                borderRadius: "16px",
+                background: "#667eea",
+                border: "none",
+                boxShadow: "0 4px 12px rgba(102, 126, 234, 0.3)",
+                fontSize: "16px",
+                fontWeight: "bold",
+                minWidth: "80px"
+              }}
             >
               发送
             </Button>
+          </div>
+          <div style={{ 
+            marginTop: "8px", 
+            fontSize: "12px", 
+            color: "#999",
+            textAlign: "center"
+          }}>
+            💡 按 Enter 发送，Shift + Enter 换行
           </div>
         </div>
       </div>
@@ -458,9 +639,289 @@ function App() {
   };
 
   // 记忆库组件
-  const MemoryLibrary = () => {
+  // 编辑记忆表单组件
+  const EditMemoryForm = ({ memory, onSave }) => {
+    const [form] = Form.useForm();
+    
+    const categories = [
+      '个人信息', '人生规划', '个人价值', 
+      '个人成就', '生活习惯', '人际关系'
+    ];
+
+    const handleSubmit = (values) => {
+      onSave(values);
+    };
+
     return (
-      <div style={{ padding: 24, height: "100vh", overflow: "auto" }}>
+      <Form
+        form={form}
+        layout="vertical"
+        initialValues={{
+          title: memory.title,
+          category: memory.category,
+          content: memory.content
+        }}
+        onFinish={handleSubmit}
+        style={{ marginTop: 16 }}
+      >
+        <Form.Item
+          name="title"
+          label="标题"
+          rules={[{ required: true, message: '请输入标题' }]}
+        >
+          <Input placeholder="请输入记忆标题" />
+        </Form.Item>
+        
+        <Form.Item
+          name="category"
+          label="分类"
+          rules={[{ required: true, message: '请选择分类' }]}
+        >
+          <Select placeholder="请选择分类">
+            {categories.map(cat => (
+              <Select.Option key={cat} value={cat}>{cat}</Select.Option>
+            ))}
+          </Select>
+        </Form.Item>
+        
+        <Form.Item
+          name="content"
+          label="内容"
+          rules={[{ required: true, message: '请输入内容' }]}
+        >
+          <Input.TextArea 
+            rows={8} 
+            placeholder="请输入记忆内容"
+            style={{ resize: 'vertical' }}
+          />
+        </Form.Item>
+        
+        <Form.Item style={{ marginBottom: 0, textAlign: 'right' }}>
+          <Button 
+            onClick={() => Modal.destroyAll()} 
+            style={{ marginRight: 8 }}
+          >
+            取消
+          </Button>
+          <Button type="primary" htmlType="submit">
+            保存
+          </Button>
+        </Form.Item>
+      </Form>
+    );
+  };
+
+  const MemoryLibrary = () => {
+    // 预览记忆
+    const previewMemory = (memory) => {
+      Modal.info({
+        title: null, // 移除默认标题
+        width: 800,
+        style: { top: 20 },
+        bodyStyle: { padding: 0 },
+        footer: null, // 移除底部按钮
+        closable: true, // 启用右上角关闭按钮
+        maskClosable: true, // 点击遮罩关闭
+        closeIcon: (
+          <div style={{
+            width: '28px',
+            height: '28px',
+            backgroundColor: '#ff4d4f',
+            borderRadius: '4px', // 方形圆角
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: 'white',
+            fontSize: '18px',
+            fontWeight: 'bold',
+            cursor: 'pointer',
+            boxShadow: '0 2px 8px rgba(255, 77, 79, 0.3)',
+            transition: 'all 0.2s',
+            position: 'absolute',
+            top: '16px',
+            right: '16px',
+            zIndex: 1000
+          }}
+          onMouseEnter={(e) => {
+            e.target.style.backgroundColor = '#ff7875';
+            e.target.style.transform = 'scale(1.05)';
+          }}
+          onMouseLeave={(e) => {
+            e.target.style.backgroundColor = '#ff4d4f';
+            e.target.style.transform = 'scale(1)';
+          }}
+          >
+            ×
+          </div>
+        ),
+        content: (
+          <div style={{ 
+            padding: '24px',
+            paddingTop: '60px', // 为顶部关闭按钮留出空间
+            maxHeight: '75vh', 
+            overflow: 'auto',
+            position: 'relative'
+          }}>
+            {/* 自定义标题栏 */}
+            <div style={{ 
+              marginBottom: '20px',
+              paddingBottom: '16px',
+              borderBottom: '2px solid #f0f0f0'
+            }}>
+              <h2 style={{ 
+                margin: 0,
+                fontSize: '20px',
+                fontWeight: 'bold',
+                color: '#262626'
+              }}>
+                {memory.title || '记忆详情'}
+              </h2>
+              <div style={{ marginTop: '12px', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                <Tag color="blue" style={{ fontSize: '13px', padding: '4px 12px' }}>
+                  {memory.category}
+                </Tag>
+                {memory.tags && memory.tags.split(',').filter(tag => tag.trim()).map(tag => (
+                  <Tag key={tag.trim()} color="green" style={{ fontSize: '13px', padding: '4px 12px' }}>
+                    {tag.trim()}
+                  </Tag>
+                ))}
+              </div>
+            </div>
+            
+            {/* 内容区域 */}
+            <div style={{ 
+              padding: '20px',
+              backgroundColor: '#fafafa',
+              borderRadius: '8px',
+              border: '1px solid #e8e8e8',
+              whiteSpace: 'pre-wrap',
+              lineHeight: '1.6',
+              fontSize: '15px',
+              color: '#333',
+              minHeight: '200px'
+            }}>
+              {memory.content}
+            </div>
+            
+            {/* 底部信息 */}
+            <div style={{ 
+              marginTop: '20px',
+              padding: '16px',
+              backgroundColor: '#f9f9f9',
+              borderRadius: '6px',
+              fontSize: '13px',
+              color: '#666',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center'
+            }}>
+              <span>
+                📅 创建时间: {new Date(memory.timestamp).toLocaleString('zh-CN')}
+              </span>
+              {memory.filename && (
+                <span>
+                  📄 文件: {memory.filename}
+                </span>
+              )}
+            </div>
+          </div>
+        )
+      });
+    };
+
+    // 删除记忆
+    const deleteMemory = async (memory) => {
+      Modal.confirm({
+        title: '确认删除记忆？',
+        content: `确定要删除记忆"${memory.title || '无标题'}"吗？此操作不可恢复。`,
+        okText: '删除',
+        okType: 'danger',
+        cancelText: '取消',
+        async onOk() {
+          try {
+            // 保存当前滚动位置
+            const scrollContainer = document.querySelector('[data-memory-scroll-container]');
+            const scrollTop = scrollContainer ? scrollContainer.scrollTop : 0;
+            
+            // 调用后端API删除记忆文件
+            const response = await fetch(`http://localhost:3001/api/memories/${memory.filename}`, {
+              method: 'DELETE'
+            });
+            
+            if (response.ok) {
+              // 从前端状态中删除
+              setMemories(prev => prev.filter(m => m.id !== memory.id));
+              message.success('记忆已删除');
+              
+              // 恢复滚动位置
+              setTimeout(() => {
+                if (scrollContainer) {
+                  scrollContainer.scrollTop = scrollTop;
+                }
+              }, 50);
+            } else {
+              const error = await response.json();
+              message.error(`删除失败: ${error.error || '未知错误'}`);
+            }
+          } catch (error) {
+            console.error('删除记忆失败:', error);
+            message.error('删除失败，请检查网络连接');
+          }
+        }
+      });
+    };
+
+    // 编辑记忆
+    const editMemory = (memory) => {
+      Modal.confirm({
+        title: '编辑记忆',
+        width: 600,
+        content: (
+          <EditMemoryForm 
+            memory={memory} 
+            onSave={(updatedMemory) => {
+              handleSaveMemory(memory, updatedMemory);
+            }}
+          />
+        ),
+        footer: null,
+        closable: true,
+        maskClosable: false
+      });
+    };
+
+    // 保存编辑后的记忆
+    const handleSaveMemory = async (originalMemory, updatedMemory) => {
+      try {
+        const response = await fetch(`http://localhost:3001/api/memories/${originalMemory.filename}`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(updatedMemory)
+        });
+
+        if (response.ok) {
+          // 更新前端状态
+          setMemories(prev => prev.map(m => 
+            m.id === originalMemory.id 
+              ? { ...m, ...updatedMemory, timestamp: new Date().toISOString() }
+              : m
+          ));
+          message.success('记忆已更新');
+          Modal.destroyAll();
+        } else {
+          const error = await response.json();
+          message.error(`更新失败: ${error.error || '未知错误'}`);
+        }
+      } catch (error) {
+        console.error('更新记忆失败:', error);
+        message.error('更新失败，请检查网络连接');
+      }
+    };
+
+    return (
+      <div style={{ padding: 24, height: "100vh", overflow: "auto" }} data-memory-scroll-container>
         <Card title="记忆库">
           {memories.length === 0 ? (
             <Empty description="记忆库为空" />
@@ -468,24 +929,137 @@ function App() {
             <List
               dataSource={memories}
               renderItem={(memory) => (
-                <List.Item style={{ padding: '16px', border: '1px solid #f0f0f0', borderRadius: '8px', marginBottom: '12px' }}>
-                  <div style={{ width: '100%' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-                      <Text strong style={{ fontSize: '16px', flex: 1 }}>
+                <List.Item style={{ 
+                  padding: '12px 16px', 
+                  border: '2px solid #f0f0f0', 
+                  borderRadius: '12px', 
+                  marginBottom: '8px',
+                  background: 'linear-gradient(135deg, #ffffff 0%, #fafafa 100%)',
+                  boxShadow: '0 2px 8px rgba(0,0,0,0.06)',
+                  transition: 'all 0.3s ease',
+                  cursor: 'pointer',
+                  minHeight: '52px'
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.transform = 'translateY(-2px)';
+                  e.currentTarget.style.boxShadow = '0 8px 24px rgba(0,0,0,0.12)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.transform = 'translateY(0)';
+                  e.currentTarget.style.boxShadow = '0 4px 12px rgba(0,0,0,0.08)';
+                }}
+                >
+                  <div style={{ 
+                    width: '100%', 
+                    display: 'grid',
+                    gridTemplateColumns: '1fr 240px 140px',
+                    alignItems: 'center',
+                    gap: 16
+                  }}>
+                    {/* 标签+标题列 */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                      <Tag 
+                        color={
+                          memory.category === '个人信息' ? 'blue' :
+                          memory.category === '人生规划' ? 'green' :
+                          memory.category === '个人价值' ? 'purple' :
+                          memory.category === '个人成就' ? 'gold' :
+                          memory.category === '生活习惯' ? 'cyan' :
+                          memory.category === '人际关系' ? 'magenta' :
+                          'default'
+                        }
+                        style={{ 
+                          fontSize: '12px', 
+                          padding: '2px 8px',
+                          borderRadius: '6px',
+                          fontWeight: 'bold',
+                          flexShrink: 0
+                        }}
+                      >
+                        {memory.category}
+                      </Tag>
+                      <Text strong style={{ 
+                        fontSize: '18px', 
+                        color: '#262626',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                        minWidth: 0
+                      }}>
                         {memory.title || '无标题'}
                       </Text>
-                      <Text type="secondary" style={{ fontSize: '12px' }}>
-                        {new Date(memory.timestamp).toLocaleString("zh-CN")}
-                      </Text>
-                      <Tag color="blue">{memory.category}</Tag>
                     </div>
-                    <div style={{ marginBottom: 12 }}>
-                      <Text style={{ color: '#999', fontSize: '13px' }}>
-                        {memory.content.length > 100 
-                          ? `${memory.content.substring(0, 100)}...` 
-                          : memory.content}
-                      </Text>
+                    
+                    {/* 按钮列 */}
+                    <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
+                      <Button
+                        size="small"
+                        type="primary"
+                        icon={<EyeOutlined />}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          previewMemory(memory);
+                        }}
+                        style={{
+                          borderRadius: '6px',
+                          backgroundColor: '#52c41a',
+                          border: 'none',
+                          color: 'white',
+                          fontSize: '12px',
+                          height: '28px'
+                        }}
+                      >
+                        预览
+                      </Button>
+                      <Button
+                        size="small"
+                        icon={<EditOutlined />}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          editMemory(memory);
+                        }}
+                        style={{
+                          borderRadius: '6px',
+                          backgroundColor: '#1890ff',
+                          border: 'none',
+                          color: 'white',
+                          fontSize: '12px',
+                          height: '28px'
+                        }}
+                      >
+                        编辑
+                      </Button>
+                      <Button
+                        size="small"
+                        icon={<DeleteOutlined />}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          deleteMemory(memory);
+                        }}
+                        style={{
+                          borderRadius: '6px',
+                          backgroundColor: '#ff4d4f',
+                          border: 'none',
+                          color: 'white',
+                          fontSize: '12px',
+                          height: '28px'
+                        }}
+                      >
+                        删除
+                      </Button>
                     </div>
+                    
+                    {/* 时间列 */}
+                    <Text type="secondary" style={{ 
+                      fontSize: '11px', 
+                      fontStyle: 'italic',
+                      textAlign: 'right',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap'
+                    }}>
+                      {new Date(memory.timestamp).toLocaleString("zh-CN")}
+                    </Text>
                   </div>
                 </List.Item>
               )}
@@ -649,19 +1223,172 @@ function App() {
 
   return (
     <Layout style={{ height: "100vh" }}>
-      <Sider width={250} theme="light">
-        <div style={{ padding: 16, fontWeight: 500 }}>AI私人助理</div>
+      <Sider width={280} style={{ background: '#fff', boxShadow: '2px 0 8px rgba(0,0,0,0.1)' }}>
+        <div style={{ 
+          padding: '24px 20px', 
+          background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', 
+          color: 'white', 
+          fontSize: '20px', 
+          fontWeight: 'bold',
+          textAlign: 'center',
+          borderRadius: '0 0 16px 16px',
+          margin: '0 8px 16px 8px'
+        }}>
+          AI私人助理
+        </div>
         <Menu
           mode="inline"
           selectedKeys={[currentTab]}
+          style={{ 
+            border: 'none',
+            padding: '0 12px'
+          }}
           items={[
-            { key: "chat", icon: <MessageOutlined />, label: "对话", onClick: () => setCurrentTab("chat") },
-            { key: "memory", icon: <DatabaseOutlined />, label: "记忆库", onClick: () => setCurrentTab("memory") },
-            { key: "workflow", icon: <AppstoreOutlined />, label: "指令", onClick: () => setCurrentTab("workflow") },
-            { key: "settings", icon: <SettingOutlined />, label: "设置", onClick: () => setCurrentTab("settings") },
-            { key: "logs", icon: <InfoCircleOutlined />, label: "运行日志", onClick: () => setCurrentTab("logs") },
+            {
+              key: "chat",
+              icon: <MessageOutlined style={{ fontSize: '18px', color: '#1890ff' }} />,
+              label: (
+                <span style={{ 
+                  fontSize: '16px', 
+                  fontWeight: currentTab === 'chat' ? 'bold' : 'normal',
+                  marginLeft: '8px'
+                }}>
+                  智能对话
+                </span>
+              ),
+              style: {
+                height: '56px',
+                lineHeight: '56px',
+                margin: '8px 0',
+                borderRadius: '12px',
+                backgroundColor: currentTab === 'chat' ? '#e6f7ff' : 'transparent',
+                border: currentTab === 'chat' ? '2px solid #1890ff' : '2px solid transparent'
+              },
+              onClick: () => switchToChat()
+            },
+            {
+              key: "memory",
+              icon: <DatabaseOutlined style={{ fontSize: '18px', color: '#52c41a' }} />,
+              label: (
+                <span style={{ 
+                  fontSize: '16px', 
+                  fontWeight: currentTab === 'memory' ? 'bold' : 'normal',
+                  marginLeft: '8px'
+                }}>
+                  记忆库
+                </span>
+              ),
+              style: {
+                height: '56px',
+                lineHeight: '56px',
+                margin: '8px 0',
+                borderRadius: '12px',
+                backgroundColor: currentTab === 'memory' ? '#f6ffed' : 'transparent',
+                border: currentTab === 'memory' ? '2px solid #52c41a' : '2px solid transparent'
+              },
+              onClick: () => switchToOtherTab("memory")
+            },
+            {
+              key: "workflow",
+              icon: <AppstoreOutlined style={{ fontSize: '18px', color: '#fa8c16' }} />,
+              label: (
+                <span style={{ 
+                  fontSize: '16px', 
+                  fontWeight: currentTab === 'workflow' ? 'bold' : 'normal',
+                  marginLeft: '8px'
+                }}>
+                  智能指令
+                </span>
+              ),
+              style: {
+                height: '56px',
+                lineHeight: '56px',
+                margin: '8px 0',
+                borderRadius: '12px',
+                backgroundColor: currentTab === 'workflow' ? '#fff7e6' : 'transparent',
+                border: currentTab === 'workflow' ? '2px solid #fa8c16' : '2px solid transparent'
+              },
+              onClick: () => switchToOtherTab("workflow")
+            },
+            {
+              key: "settings",
+              icon: <SettingOutlined style={{ fontSize: '18px', color: '#722ed1' }} />,
+              label: (
+                <span style={{ 
+                  fontSize: '16px', 
+                  fontWeight: currentTab === 'settings' ? 'bold' : 'normal',
+                  marginLeft: '8px'
+                }}>
+                  系统设置
+                </span>
+              ),
+              style: {
+                height: '56px',
+                lineHeight: '56px',
+                margin: '8px 0',
+                borderRadius: '12px',
+                backgroundColor: currentTab === 'settings' ? '#f9f0ff' : 'transparent',
+                border: currentTab === 'settings' ? '2px solid #722ed1' : '2px solid transparent'
+              },
+              onClick: () => switchToOtherTab("settings")
+            },
+            {
+              key: "logs",
+              icon: <InfoCircleOutlined style={{ fontSize: '18px', color: '#eb2f96' }} />,
+              label: (
+                <span style={{ 
+                  fontSize: '16px', 
+                  fontWeight: currentTab === 'logs' ? 'bold' : 'normal',
+                  marginLeft: '8px'
+                }}>
+                  运行日志
+                </span>
+              ),
+              style: {
+                height: '56px',
+                lineHeight: '56px',
+                margin: '8px 0',
+                borderRadius: '12px',
+                backgroundColor: currentTab === 'logs' ? '#fff0f6' : 'transparent',
+                border: currentTab === 'logs' ? '2px solid #eb2f96' : '2px solid transparent'
+              },
+              onClick: () => switchToOtherTab("logs")
+            }
           ]}
         />
+        
+        {/* 老祖模式状态显示 */}
+        {laoziSession && (
+          <div style={{ 
+            margin: '20px 12px',
+            padding: '16px',
+            background: 'linear-gradient(135deg, #ffd89b 0%, #19547b 100%)',
+            borderRadius: '12px',
+            color: 'white',
+            textAlign: 'center',
+            boxShadow: '0 4px 12px rgba(0,0,0,0.15)'
+          }}>
+            <div style={{ fontSize: '16px', fontWeight: 'bold', marginBottom: '8px' }}>
+              🧙‍♂️ 老祖模式
+            </div>
+            <div style={{ fontSize: '14px', opacity: 0.9 }}>
+              进度: {laoziSession.progress}
+            </div>
+            <Button 
+              size="small" 
+              style={{ 
+                marginTop: '12px',
+                backgroundColor: 'rgba(255,255,255,0.2)',
+                border: '1px solid rgba(255,255,255,0.3)',
+                color: 'white',
+                borderRadius: '8px'
+              }}
+              onClick={exitLaoziMode}
+            >
+              退出老祖
+            </Button>
+          </div>
+        )}
       </Sider>
       <Layout>
         <Content style={{ height: "100vh", overflow: "hidden" }}>

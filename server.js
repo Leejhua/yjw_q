@@ -23,6 +23,62 @@ const upload = multer({
   limits: { fileSize: 10 * 1024 * 1024 } // 10MB限制
 });
 
+// 用户会话管理
+const userSessions = new Map(); // 存储每个用户的数据
+
+// 生成用户ID
+function generateUserId() {
+  return 'user_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+}
+
+// 获取或创建用户会话
+function getUserSession(userId) {
+  if (!userSessions.has(userId)) {
+    userSessions.set(userId, {
+      memories: [],
+      messages: [],
+      laoziSession: null,
+      createdAt: new Date().toISOString()
+    });
+  }
+  return userSessions.get(userId);
+}
+
+// 清理过期会话（24小时后清理）
+function cleanupExpiredSessions() {
+  const now = Date.now();
+  const expireTime = 24 * 60 * 60 * 1000; // 24小时
+  
+  for (const [userId, session] of userSessions.entries()) {
+    const sessionAge = now - new Date(session.createdAt).getTime();
+    if (sessionAge > expireTime) {
+      userSessions.delete(userId);
+      console.log(`🧹 清理过期会话: ${userId}`);
+    }
+  }
+}
+
+// 每小时清理一次过期会话
+setInterval(cleanupExpiredSessions, 60 * 60 * 1000);
+
+// API端点：初始化用户会话
+app.post('/api/init-session', (req, res) => {
+  const userId = generateUserId();
+  const session = getUserSession(userId);
+  
+  console.log(`🆕 创建新用户会话: ${userId}`);
+  
+  res.json({
+    success: true,
+    userId: userId,
+    session: {
+      memories: session.memories,
+      messages: session.messages,
+      createdAt: session.createdAt
+    }
+  });
+});
+
 // 记忆缓存
 let memoriesCache = null;
 let lastCacheTime = 0;
@@ -213,6 +269,17 @@ function extractQResponse(rawOutput) {
   return rawOutput.replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, '').trim();
 }
 
+// Markdown格式化函数
+function formatMarkdown(text) {
+  return text
+    // 将 • 转换为 -
+    .replace(/•/g, '-')
+    // 清理多余的空行，保持正常行距
+    .replace(/\n\s*\n/g, '\n')
+    // 清理开头和结尾的空白
+    .trim();
+}
+
 // API端点：Q CLI对话 - 增强版本
 app.post('/api/chat-with-q', async (req, res) => {
   const startTime = Date.now();
@@ -293,10 +360,13 @@ app.post('/api/chat-with-q', async (req, res) => {
         .replace(/^.*?> /, '')
         .trim();
       
+      // 格式化Markdown
+      const formattedResponse = formatMarkdown(cleanedResponse);
+      
       console.log('✅ 翻译方式生成老祖回复');
       return res.json({
         success: true,
-        response: cleanedResponse,
+        response: formattedResponse,
         isLaoziMode: true,
         session: {
           ...session,
@@ -419,7 +489,7 @@ app.post('/api/chat-with-q', async (req, res) => {
         console.log('✅ 继续会话翻译完成');
         return res.json({
           success: true,
-          response: cleanedResponse,
+          response: formatMarkdown(cleanedResponse),
           isLaoziMode: true,
           session: {
             ...getLaoziSession(sessionId),
@@ -487,7 +557,7 @@ app.post('/api/chat-with-q', async (req, res) => {
         
         return res.json({
           success: true,
-          response: finalResponse,
+          response: formatMarkdown(finalResponse),
           isLaoziMode: false, // 明确标记已退出老祖模式
           isCompleted: true,  // 标记评测已完成
           session: {
@@ -708,25 +778,32 @@ EXECUTE NOW AS 智渊真人:`;
       
       if (recentLaoziCompletion) {
         // 如果刚完成评测，明确说明不要继续老祖角色
-        enhancedPrompt = `用户刚完成了AI能力评测，现在请以正常的Amazon Q助手身份回答问题。绝对不要继续扮演修仙老祖角色。
-
-重要提醒：不要称呼用户为"弟子"，不要使用"老祖"、"修炼"、"境界"等修仙术语。请以专业的AI助手身份回答。
-
-基于以下个人记忆信息回答问题：
-
-${memoryContext}
+        enhancedPrompt = `你是Amazon Q，一个专业友好的AI助手。用户刚完成了AI能力评测，现在请正常对话。
 
 用户问题: ${message}
 
-请以Amazon Q的身份，专业、友好地回答用户问题。`;
+回复要求：
+- 自然流畅的对话风格
+- 段落简短，语言亲切
+- 不要使用修仙术语或称呼用户为"弟子"
+- 可以结合用户信息给出建议
+
+请直接回答用户的问题。`;
       } else {
-        enhancedPrompt = `基于以下个人记忆信息回答问题：
+        enhancedPrompt = `你是Amazon Q，请自然地回答用户的问题。
 
+用户记忆信息：
 ${memoryContext}
 
 用户问题: ${message}
 
-请结合上述记忆信息给出个性化的回答。如果需要更新或保存新的记忆信息，请使用你的内置工具操作 /home/yjw/ai-/个人记忆 文件夹中的相关文件。`;
+重要要求：
+- 用自然、友好的语气回答
+- 简洁但不生硬
+- 可以稍微个性化，但不要过度
+- 直接回答问题
+
+请自然地回答。`;
       }
     }
 
@@ -847,7 +924,7 @@ ${memoryContext}
       // 返回预设模板而不是Q CLI的回复
       return res.json({
         success: true,
-        response: templateResponse,
+        response: formatMarkdown(templateResponse), // 添加格式化
         sessionId,
         debug: {
           timestamp: new Date().toISOString(),
@@ -884,16 +961,79 @@ ${memoryContext}
       }
     }
     
+    // 分析实际使用的记忆
+    const actuallyUsedMemories = [];
+    if (memories && memories.length > 0) {
+      // 非常严格的记忆使用检测
+      for (const memory of memories) {
+        let isUsed = false;
+        
+        // 只检查记忆中的具体事实是否在回复中被明确使用
+        const memoryFacts = extractFactsFromMemory(memory);
+        for (const fact of memoryFacts) {
+          // 必须是完整匹配且长度大于2的有意义信息
+          if (response.includes(fact) && fact.length > 2) {
+            isUsed = true;
+            console.log(`✅ 检测到使用记忆事实: ${fact}`);
+            break;
+          }
+        }
+        
+        if (isUsed) {
+          actuallyUsedMemories.push({
+            id: memory.id,
+            title: memory.title,
+            category: memory.category
+          });
+        }
+      }
+    }
+
+    console.log(`🔍 记忆检测结果: 提供${memories.length}个，实际使用${actuallyUsedMemories.length}个`);
+
+    // 提取记忆中的关键事实信息
+    function extractFactsFromMemory(memory) {
+      const facts = [];
+      const content = memory.content;
+      
+      // 提取姓名、年龄、职位、公司等关键信息，支持Markdown格式
+      const patterns = [
+        /\*\*姓名\*\*[：:]\s*([^\n，。]+)/,  // Markdown格式
+        /姓名[：:]\s*([^\n，。]+)/,          // 普通格式
+        /\*\*年龄\*\*[：:]\s*(\d+)/,
+        /年龄[：:]\s*(\d+)/,
+        /\*\*职位\*\*[：:]\s*([^\n，。]+)/,
+        /职位[：:]\s*([^\n，。]+)/,
+        /\*\*公司\*\*[：:]\s*([^\n，。]+)/,
+        /公司[：:]\s*([^\n，。]+)/,
+        /\*\*居住地\*\*[：:]\s*([^\n，。]+)/,
+        /居住地[：:]\s*([^\n，。]+)/,
+        /\*\*来自\*\*[：:]\s*([^\n，。]+)/,
+        /来自[：:]\s*([^\n，。]+)/
+      ];
+      
+      patterns.forEach(pattern => {
+        const match = content.match(pattern);
+        if (match && match[1]) {
+          facts.push(match[1].trim());
+        }
+      });
+      
+      return facts;
+    }
+
     res.json({
       success: true,
-      response: response,
+      response: formatMarkdown(response), // 添加格式化
       sessionId: sessionId,
+      actuallyUsedMemories: actuallyUsedMemories, // 新增：实际使用的记忆
       debug: {
         timestamp: new Date().toISOString(),
         duration: Date.now() - startTime,
         messageLength: message.length,
         responseLength: response.length,
-        memoriesUsed: memories.length
+        memoriesProvided: memories.length,
+        memoriesActuallyUsed: actuallyUsedMemories.length
       }
     });
 
@@ -1514,6 +1654,44 @@ app.put('/api/memories/:filename', async (req, res) => {
     });
   } catch (error) {
     console.error('更新文件失败:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// API端点：更新记忆文件
+app.put('/api/memories/:filename', async (req, res) => {
+  try {
+    const filename = req.params.filename;
+    const filePath = path.join(memoriesDir, filename);
+    const { title, category, content } = req.body;
+    
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: '文件不存在' });
+    }
+    
+    // 读取原文件获取原始数据
+    const originalContent = await fs.promises.readFile(filePath, 'utf8');
+    const originalData = JSON.parse(originalContent);
+    
+    // 更新数据
+    const updatedData = {
+      ...originalData,
+      title: title || originalData.title,
+      category: category || originalData.category,
+      content: content || originalData.content,
+      timestamp: new Date().toISOString() // 更新时间戳
+    };
+    
+    // 写入更新后的数据
+    await fs.promises.writeFile(filePath, JSON.stringify(updatedData, null, 2), 'utf8');
+    
+    res.json({ 
+      success: true, 
+      message: `记忆 ${filename} 已更新`,
+      data: updatedData
+    });
+  } catch (error) {
+    console.error('更新记忆失败:', error);
     res.status(500).json({ error: error.message });
   }
 });
