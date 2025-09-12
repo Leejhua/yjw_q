@@ -7,7 +7,7 @@ import { fileURLToPath } from 'url';
 import { spawn, exec } from 'child_process';
 
 const app = express();
-const PORT = 3001;
+const PORT = process.env.PORT || 3001;
 
 // 获取当前目录
 const __filename = fileURLToPath(import.meta.url);
