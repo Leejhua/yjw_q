@@ -1,37 +1,19 @@
-# 使用包含Q CLI的基础镜像
-FROM node:18-slim
+# 使用老板提供的Q CLI基础镜像
+FROM ghcr.io/你的用户名/q:latest
 
-# 安装系统依赖
-RUN apt-get update && apt-get install -y \
-    curl \
-    wget \
-    unzip \
-    && rm -rf /var/lib/apt/lists/*
+# 切换到工作目录
+WORKDIR /home/quser/workspace
 
-# 安装Amazon Q CLI
-RUN curl -Lo q-linux-x64.zip "https://d2bqhfv5ky8yz8.cloudfront.net/q-linux-x64.zip" && \
-    unzip q-linux-x64.zip && \
-    chmod +x q && \
-    mv q /usr/local/bin/ && \
-    rm q-linux-x64.zip
-
-# 设置工作目录
-WORKDIR /app
-
-# 复制package文件
+# 复制项目文件
 COPY package*.json ./
+COPY server.js ./
+COPY 个人记忆/ ./个人记忆/
 
-# 安装依赖
+# 安装Node.js依赖
 RUN npm install
-
-# 复制应用代码
-COPY . .
-
-# 创建记忆目录
-RUN mkdir -p 个人记忆
 
 # 暴露端口
 EXPOSE 3001
 
-# 启动命令
+# 启动后端服务
 CMD ["node", "server.js"]
