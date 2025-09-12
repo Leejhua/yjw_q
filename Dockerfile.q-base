@@ -31,7 +31,7 @@ RUN curl --proto '=https' --tlsv1.2 -sSf \
     "https://desktop-release.q.us-east-1.amazonaws.com/latest/q-aarch64-linux.zip" \
     -o /tmp/q.zip \
     && unzip /tmp/q.zip -d /tmp \
-    && mv /tmp/q/q /usr/local/bin/q \
+    && mv /tmp/q/bin/q /usr/local/bin/q \
     && chmod +x /usr/local/bin/q \
     && rm -rf /tmp/q.zip /tmp/q
 
