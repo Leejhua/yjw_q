@@ -1,12 +1,12 @@
-// API配置 - 支持GitHub Codespaces部署
+// API配置 - Cloudflare Tunnel
 const isDevelopment = import.meta.env.DEV;
 
-// GitHub Codespaces后端地址
-const CODESPACES_BACKEND_URL = 'https://ideal-succotash-g4pg7xxpp77rhp7g9-3001.app.github.dev';
+// Cloudflare Tunnel 后端地址
+const TUNNEL_BACKEND_URL = 'https://sword-capital-according-gathered.trycloudflare.com';
 
 export const API_BASE_URL = isDevelopment 
   ? 'http://localhost:3001' 
-  : CODESPACES_BACKEND_URL;
+  : TUNNEL_BACKEND_URL;
 
 console.log('🔧 API配置:', {
   isDevelopment,
