@@ -1,15 +1,14 @@
-// API配置 - Cloudflare Tunnel
+// API配置 - 本地开发模式
 const isDevelopment = import.meta.env.DEV;
 
-// Cloudflare Tunnel 后端地址
-const TUNNEL_BACKEND_URL = 'https://sword-capital-according-gathered.trycloudflare.com';
+// 本地后端地址
+const LOCAL_BACKEND_URL = 'http://localhost:3001';
 
-export const API_BASE_URL = isDevelopment 
-  ? 'http://localhost:3001' 
-  : TUNNEL_BACKEND_URL;
+export const API_BASE_URL = LOCAL_BACKEND_URL;
 
 console.log('🔧 API配置:', {
   isDevelopment,
   API_BASE_URL,
+  mode: '本地模式',
   currentHost: window.location.host
 });
