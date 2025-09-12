@@ -1738,6 +1738,66 @@ process.on('SIGTERM', () => {
   console.log('服务器正在关闭...');
   process.exit(0);
 });
+// 健康检查端点
+app.get('/health', (req, res) => {
+  res.json({ 
+    status: 'ok', 
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+    version: '1.0.0'
+  });
+});
+
+// API端点：简单的 POST /chat 接口
+app.post('/chat', async (req, res) => {
+  try {
+    const { message } = req.body;
+    
+    if (!message) {
+      return res.status(400).json({ error: '消息不能为空' });
+    }
+    
+    // 调用本地 q CLI
+    const { spawn } = require('child_process');
+    const qProcess = spawn('q', ['chat', '--message', message], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      shell: true
+    });
+    
+    let stdout = '';
+    let stderr = '';
+    
+    qProcess.stdout.on('data', (data) => {
+      stdout += data.toString();
+    });
+    
+    qProcess.stderr.on('data', (data) => {
+      stderr += data.toString();
+    });
+    
+    qProcess.on('close', (code) => {
+      if (code !== 0) {
+        console.error('Q CLI 错误:', stderr);
+        return res.status(500).json({ error: `Q CLI 执行失败: ${stderr}` });
+      }
+      
+      // 清理输出中的 ANSI 颜色代码
+      const cleanOutput = stdout.replace(/\x1b\[[0-9;]*m/g, '').trim();
+      
+      res.json({ reply: cleanOutput });
+    });
+    
+    qProcess.on('error', (error) => {
+      console.error('Q CLI 进程错误:', error);
+      res.status(500).json({ error: `无法启动 Q CLI: ${error.message}` });
+    });
+    
+  } catch (error) {
+    console.error('处理 /chat 请求时出错:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // 静态文件服务
 app.use(express.static('.'));
 app.get('/', (req, res) => {
