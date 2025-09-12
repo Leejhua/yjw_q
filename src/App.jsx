@@ -300,11 +300,7 @@ function App() {
   const generateAIResponse = async (userMessage, relevantMemories) => {
     addLog("info", "开始生成AI回复", userMessage);
     
-    const isAvailable = await checkQCliStatus();
-    if (!isAvailable) {
-      throw new Error("Amazon Q CLI不可用，请确保已正确安装和配置");
-    }
-    
+    // 直接调用Q CLI，不检查状态
     const result = await chatWithQCli(userMessage, relevantMemories);
     return result; // 返回包含response和actuallyUsedMemories的对象
   };
