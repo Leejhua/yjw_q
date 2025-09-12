@@ -26,14 +26,14 @@ RUN apt-get update && apt-get install -y \
 RUN useradd -m -s /bin/bash -u 1000 quser \
     && echo "quser ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
 
-# 安装 Amazon Q CLI
+# 安装 Amazon Q CLI (使用 ZIP 包)
 RUN curl --proto '=https' --tlsv1.2 -sSf \
-    https://desktop-release.q.us-east-1.amazonaws.com/latest/amazon-q.deb \
-    -o /tmp/amazon-q.deb \
-    && apt-get update \
-    && apt-get install -y /tmp/amazon-q.deb \
-    && rm /tmp/amazon-q.deb \
-    && rm -rf /var/lib/apt/lists/*
+    "https://desktop-release.q.us-east-1.amazonaws.com/latest/q-aarch64-linux.zip" \
+    -o /tmp/q.zip \
+    && unzip /tmp/q.zip -d /tmp \
+    && mv /tmp/q/q /usr/local/bin/q \
+    && chmod +x /usr/local/bin/q \
+    && rm -rf /tmp/q.zip /tmp/q
 
 # 切换到用户
 USER quser
