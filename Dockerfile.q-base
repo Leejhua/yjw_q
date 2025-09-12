@@ -1,16 +1,49 @@
-FROM ghcr.io/你的用户名/q:latest
+FROM ubuntu:22.04
 
-# 切换到工作目录
-WORKDIR /home/quser/workspace
+# 设置环境变量
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=UTC
+ENV LANG=C.UTF-8
+ENV Q_LOG_LEVEL=info
 
-# 安装 Node.js
-USER root
-RUN curl -fsSL https://deb.nodesource.com/setup_18.x | bash - && \
-    apt-get install -y nodejs && \
-    rm -rf /var/lib/apt/lists/*
+# 安装基础工具和 Node.js
+RUN apt-get update && apt-get install -y \
+    curl \
+    git \
+    jq \
+    python3 \
+    python3-pip \
+    ca-certificates \
+    unzip \
+    vim \
+    wget \
+    sudo \
+    && curl -fsSL https://deb.nodesource.com/setup_18.x | bash - \
+    && apt-get install -y nodejs \
+    && rm -rf /var/lib/apt/lists/*
 
-# 切换回 quser
+# 创建用户
+RUN useradd -m -s /bin/bash -u 1000 quser \
+    && echo "quser ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+
+# 安装 Amazon Q CLI
+RUN curl --proto '=https' --tlsv1.2 -sSf \
+    https://desktop-release.q.us-east-1.amazonaws.com/latest/amazon-q.deb \
+    -o /tmp/amazon-q.deb \
+    && apt-get update \
+    && apt-get install -y /tmp/amazon-q.deb \
+    && rm /tmp/amazon-q.deb \
+    && rm -rf /var/lib/apt/lists/*
+
+# 切换到用户
 USER quser
+
+# 创建配置目录
+RUN mkdir -p /home/quser/.aws/amazonq \
+    && mkdir -p /home/quser/.amazonq
+
+# 设置工作目录
+WORKDIR /home/quser/workspace
 
 # 复制 package.json
 COPY --chown=quser:quser package.json ./
