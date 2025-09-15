@@ -2,13 +2,14 @@ version: '3.8'
 
 services:
   ai-assistant:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile.simple
     ports:
       - "3001:3001"
     environment:
       - NODE_ENV=production
       - PORT=3001
     volumes:
-      - ./个人记忆:/home/quser/app/个人记忆
-      - ./uploads:/home/quser/app/uploads
+      - ./uploads:/app/uploads
     restart: unless-stopped
