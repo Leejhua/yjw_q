@@ -91,8 +91,18 @@ const CACHE_DURATION = 30000; // 30秒缓存
 
 // 确保个人记忆文件夹存在
 const memoriesDir = path.join(__dirname, '个人记忆');
+const domainsDir = path.join(__dirname, '领域');
 if (!fs.existsSync(memoriesDir)) {
   fs.mkdirSync(memoriesDir, { recursive: true });
+}
+
+// 根据记忆类型和领域确定存储路径
+function getMemoryPath(memoryType, domain, filename) {
+  if (memoryType === 'personal') {
+    return path.join(memoriesDir, filename);
+  } else {
+    return path.join(domainsDir, domain, filename);
+  }
 }
 
 // Q CLI 会话管理
@@ -921,6 +931,21 @@ ${memoryContext}
       const templateResponse = LAOZI_TEMPLATES[templateType];
       
       if (templateType === 'finalAssessment') {
+        // 在清除会话之前先保存记忆
+        const currentSession = getLaoziSession(sessionId);
+        if (currentSession && Object.keys(currentSession.answers).length === 8) {
+          console.log('📝 检测到老祖评测完成，准备保存记忆');
+          
+          // 自动评定境界
+          const realmEvaluation = evaluateRealm(currentSession.answers);
+          console.log('🏆 境界评定结果:', realmEvaluation);
+          
+          // 异步保存记忆，不阻塞响应
+          saveLaoziMemory(sessionId, currentSession, `${realmEvaluation.realm}（${realmEvaluation.stage}）`).catch(err => {
+            console.error('保存老祖记忆时出错:', err);
+          });
+        }
+        
         // 标记会话完成
         updateLaoziSession(sessionId, { isCompleted: true });
         console.log('✅ 老祖评测会话已完成');
@@ -1101,22 +1126,44 @@ app.get('/api/q-status', async (req, res) => {
 // API端点：保存记忆文件
 app.post('/api/save-memory', async (req, res) => {
   try {
-    const { filename, content } = req.body;
+    const { filename, content, memoryType = 'personal', domain, instructionType } = req.body;
     
     if (!filename || !content) {
       return res.status(400).json({ error: '文件名和内容不能为空' });
     }
     
     const safeFilename = filename.replace(/[^a-zA-Z0-9\u4e00-\u9fa5.-]/g, '_');
-    const filePath = path.join(memoriesDir, safeFilename);
+    let filePath;
+    
+    if (memoryType === 'instruction') {
+      if (!domain) {
+        return res.status(400).json({ error: '指令记忆必须指定领域' });
+      }
+      filePath = getMemoryPath('instruction', domain, safeFilename);
+      
+      // 确保领域目录存在
+      const domainPath = path.dirname(filePath);
+      if (!fs.existsSync(domainPath)) {
+        fs.mkdirSync(domainPath, { recursive: true });
+      }
+    } else {
+      filePath = getMemoryPath('personal', null, safeFilename);
+    }
     
     await fs.promises.writeFile(filePath, content, 'utf-8');
+    
+    const message = memoryType === 'instruction' 
+      ? `指令记忆 ${safeFilename} 已保存到 ${domain} 领域`
+      : `个人记忆 ${safeFilename} 已保存到个人记忆文件夹`;
     
     res.json({ 
       success: true, 
       path: filePath,
       filename: safeFilename,
-      message: `文件 ${safeFilename} 已保存到个人记忆文件夹`
+      memoryType,
+      domain,
+      instructionType,
+      message
     });
   } catch (error) {
     console.error('保存文件失败:', error);
@@ -1572,53 +1619,142 @@ app.post('/api/memories/refresh', (req, res) => {
 // API端点：读取所有记忆文件
 app.get('/api/memories', async (req, res) => {
   try {
-    const files = await fs.promises.readdir(memoriesDir);
-    const mdFiles = files.filter(file => file.endsWith('.md'));
-    
-    const memories = [];
-    
-    for (const filename of mdFiles) {
-      try {
-        const filePath = path.join(memoriesDir, filename);
-        const content = await fs.promises.readFile(filePath, 'utf-8');
-        
-        // 解析标题和类别
-        const lines = content.split('\n');
-        const title = lines.find(line => line.startsWith('# '))?.replace('# ', '') || 
-                     filename.replace('.md', '');
-        
-        let category = '个人记忆';
-        if (filename.includes('基本信息')) category = '个人信息';
-        else if (filename.includes('愿景')) category = '人生规划';
-        else if (filename.includes('价值观')) category = '个人价值';
-        else if (filename.includes('成就')) category = '个人成就';
-        else if (filename.includes('时间线')) category = '人生历程';
-        else if (filename.includes('习惯')) category = '生活习惯';
-        else if (filename.includes('人际关系')) category = '人际关系';
-        else if (filename.includes('家庭')) category = '家庭关系';
-        else if (filename.includes('愿望')) category = '个人愿望';
-        else if (filename.includes('快照')) category = '个人资料';
-        
-        memories.push({
-          id: filename,
-          title,
-          content,
-          category,
-          timestamp: (await fs.promises.stat(filePath)).mtime.getTime(),
-          filename,
-          sourceFile: filename
-        });
-      } catch (error) {
-        console.error(`读取文件 ${filename} 失败:`, error);
-      }
+    const { type, domain } = req.query;
+    let memories = [];
+
+    if (type === 'personal' || !type) {
+      // 读取个人记忆
+      const personalMemories = await getPersonalMemories();
+      memories = memories.concat(personalMemories);
     }
-    
+
+    if (type === 'instruction' || !type) {
+      // 读取指令记忆
+      const instructionMemories = await getInstructionMemories(domain);
+      memories = memories.concat(instructionMemories);
+    }
+
     res.json(memories);
   } catch (error) {
     console.error('读取记忆失败:', error);
     res.status(500).json({ error: error.message });
   }
 });
+
+// 获取个人记忆
+async function getPersonalMemories() {
+  const files = await fs.promises.readdir(memoriesDir);
+  const mdFiles = files.filter(file => file.endsWith('.md'));
+  
+  const memories = [];
+  for (const filename of mdFiles) {
+    try {
+      const filePath = path.join(memoriesDir, filename);
+      const content = await fs.promises.readFile(filePath, 'utf-8');
+      const stats = await fs.promises.stat(filePath);
+      
+      const lines = content.split('\n');
+      const title = lines.find(line => line.startsWith('# '))?.replace('# ', '') || 
+                   filename.replace('.md', '');
+      
+      let category = '个人记忆';
+      if (filename.includes('基本信息')) category = '个人信息';
+      else if (filename.includes('愿景')) category = '人生规划';
+      else if (filename.includes('价值观')) category = '个人价值';
+      else if (filename.includes('成就')) category = '个人成就';
+      else if (filename.includes('时间线')) category = '人生历程';
+      else if (filename.includes('习惯')) category = '生活习惯';
+      else if (filename.includes('人际关系')) category = '人际关系';
+      else if (filename.includes('家庭')) category = '家庭关系';
+      else if (filename.includes('愿望')) category = '个人愿望';
+      else if (filename.includes('快照')) category = '个人资料';
+      
+      memories.push({
+        id: filename,
+        title,
+        content,
+        category,
+        source: 'chat',
+        memoryType: 'personal',
+        timestamp: stats.mtime.getTime(),
+        filename,
+        sourceFile: filename,
+        filePath: filePath
+      });
+    } catch (error) {
+      console.error(`读取个人记忆文件 ${filename} 失败:`, error);
+    }
+  }
+  
+  return memories;
+}
+
+// 获取指令记忆
+async function getInstructionMemories(targetDomain) {
+  const memories = [];
+  const domains = ['能力管理', '健康', '财务管理', '职业管理', '关系管理'];
+  
+  for (const domain of domains) {
+    if (targetDomain && domain !== targetDomain) continue;
+    
+    const domainPath = path.join(domainsDir, domain);
+    if (!fs.existsSync(domainPath)) continue;
+    
+    try {
+      await scanDomainMemories(domainPath, domain, memories);
+    } catch (error) {
+      console.error(`扫描领域 ${domain} 失败:`, error);
+    }
+  }
+  
+  return memories;
+}
+
+// 递归扫描领域记忆文件
+async function scanDomainMemories(dirPath, domain, memories) {
+  const items = await fs.promises.readdir(dirPath);
+  
+  for (const item of items) {
+    const itemPath = path.join(dirPath, item);
+    const stats = await fs.promises.stat(itemPath);
+    
+    if (stats.isDirectory()) {
+      await scanDomainMemories(itemPath, domain, memories);
+    } else if (item.endsWith('.md') && item.includes('记忆')) {
+      // 只读取文件名包含"记忆"的文件
+      try {
+        const content = await fs.promises.readFile(itemPath, 'utf-8');
+        const lines = content.split('\n');
+        const title = lines.find(line => line.startsWith('# '))?.replace('# ', '') || 
+                     item.replace('.md', '');
+        
+        let instructionType = '通用指令';
+        if (item.includes('老祖')) instructionType = '老祖评测';
+        else if (item.includes('健康')) instructionType = '健康管理';
+        else if (item.includes('财务')) instructionType = '财务分析';
+        else if (item.includes('工作')) instructionType = '职业管理';
+        else if (item.includes('关系')) instructionType = '关系管理';
+        
+        memories.push({
+          id: `${domain}_${item}`,
+          title,
+          content,
+          category: '指令记忆',
+          source: 'instruction',
+          memoryType: 'instruction',
+          domain,
+          instructionType,
+          timestamp: stats.mtime.getTime(),
+          filename: item,
+          sourceFile: item,
+          filePath: itemPath
+        });
+      } catch (error) {
+        console.error(`读取指令记忆文件 ${item} 失败:`, error);
+      }
+    }
+  }
+}
 
 // API端点：更新记忆文件
 app.put('/api/memories/:filename', async (req, res) => {
@@ -1723,6 +1859,55 @@ app.delete('/api/memories/:filename', async (req, res) => {
   } catch (error) {
     console.error('删除文件失败:', error);
     res.status(500).json({ error: error.message });
+  }
+});
+
+// API端点：保存新指令
+app.post('/api/save-instruction', async (req, res) => {
+  try {
+    const { name, content, domain } = req.body;
+    
+    if (!name || !content || !domain) {
+      return res.status(400).json({ error: '缺少必要参数' });
+    }
+    
+    // 创建领域文件夹
+    const domainPath = path.join(__dirname, '领域', domain);
+    if (!fs.existsSync(domainPath)) {
+      fs.mkdirSync(domainPath, { recursive: true });
+    }
+    
+    // 保存指令文件
+    const instructionPath = path.join(domainPath, `${name}.md`);
+    await fs.promises.writeFile(instructionPath, content, 'utf-8');
+    
+    console.log(`💾 新指令已保存: ${instructionPath}`);
+    
+    res.json({ 
+      success: true, 
+      message: '指令创建成功',
+      path: instructionPath 
+    });
+  } catch (error) {
+    console.error('保存指令失败:', error);
+    res.status(500).json({ error: '保存指令失败: ' + error.message });
+  }
+});
+
+// API端点：获取后台日志
+app.get('/api/logs', (req, res) => {
+  try {
+    const logPath = path.join(__dirname, 'server.log');
+    if (fs.existsSync(logPath)) {
+      const logContent = fs.readFileSync(logPath, 'utf-8');
+      res.setHeader('Content-Type', 'text/plain');
+      res.send(logContent);
+    } else {
+      res.send('暂无日志文件');
+    }
+  } catch (error) {
+    console.error('读取日志失败:', error);
+    res.status(500).send('读取日志失败: ' + error.message);
   }
 });
 

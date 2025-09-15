@@ -58,12 +58,17 @@ function App() {
   const [messages, setMessages] = useState([]);
   const [chatScrollPosition, setChatScrollPosition] = useState(0); // 保存聊天页面滚动位置
   const [memories, setMemories] = useState([]);
+  const [personalMemories, setPersonalMemories] = useState([]);
+  const [instructionMemories, setInstructionMemories] = useState([]);
+  const [memoryViewType, setMemoryViewType] = useState('all');
+  const [autoRefreshLogs, setAutoRefreshLogs] = useState(false); // 'all', 'personal', 'instruction'
   const [selectedMemories, setSelectedMemories] = useState([]);
   const [workflows, setWorkflows] = useState([]);
   const [apiKey, setApiKey] = useState("");
   const [qCliStatus, setQCliStatus] = useState({ available: false, sessions: 0 });
   const [instructions, setInstructions] = useState([]);
   const [instructionsLoading, setInstructionsLoading] = useState(false);
+  const [showCreateInstructionModal, setShowCreateInstructionModal] = useState(false);
   const [laoziSession, setLaoziSession] = useState(null);
 
   // 检查Q CLI状态
@@ -94,15 +99,49 @@ function App() {
     return false;
   };
 
+  // 获取后台日志
+  const fetchLogs = async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/logs`);
+      if (response.ok) {
+        const logData = await response.text();
+        const logLines = logData.split('\n').filter(line => line.trim()).slice(-100); // 只显示最后100行
+        setLogs(logLines);
+      }
+    } catch (error) {
+      console.error('获取日志失败:', error);
+    }
+  };
+
+  // 自动刷新日志
+  useEffect(() => {
+    if (currentTab === 'logs') {
+      fetchLogs();
+      if (autoRefreshLogs) {
+        const interval = setInterval(fetchLogs, 2000); // 每2秒刷新
+        return () => clearInterval(interval);
+      }
+    }
+  }, [currentTab, autoRefreshLogs]);
+
   // 加载记忆文件
   useEffect(() => {
-    const loadPersonalMemories = async () => {
+    const loadMemories = async () => {
       try {
         const response = await fetch(`${API_BASE_URL}/api/memories`);
         if (response.ok) {
-          const loadedMemories = await response.json();
-          setMemories(loadedMemories);
-          addLog("success", "记忆库加载完成", `共加载 ${loadedMemories.length} 条记忆`);
+          const allMemories = await response.json();
+          setMemories(allMemories);
+          
+          // 分类存储
+          const personal = allMemories.filter(m => m.memoryType === 'personal');
+          const instruction = allMemories.filter(m => m.memoryType === 'instruction');
+          
+          setPersonalMemories(personal);
+          setInstructionMemories(instruction);
+          
+          addLog("success", "记忆库加载完成", 
+            `共加载 ${allMemories.length} 条记忆 (个人: ${personal.length}, 指令: ${instruction.length})`);
         }
       } catch (error) {
         console.error('读取记忆失败:', error);
@@ -110,7 +149,7 @@ function App() {
       }
     };
     
-    loadPersonalMemories();
+    loadMemories();
     loadInstructions();
     loadLaoziSession();
     checkQCliStatus();
@@ -168,8 +207,13 @@ function App() {
   // 监听页面切换 - 只负责恢复位置
   useEffect(() => {
     if (currentTab === 'chat') {
-      // 立即恢复滚动位置，无延迟
-      restoreChatScrollPosition();
+      // 只在没有新消息时恢复滚动位置
+      const hasRecentMessage = messages.length > 0 && 
+        (new Date() - new Date(messages[messages.length - 1].timestamp)) < 5000;
+      
+      if (!hasRecentMessage) {
+        restoreChatScrollPosition();
+      }
     }
   }, [currentTab]);
 
@@ -190,6 +234,8 @@ function App() {
         top: scrollContainer.scrollHeight,
         behavior: 'smooth'
       });
+      // 清除保存的滚动位置，因为我们已经滚动到底部
+      setChatScrollPosition(scrollContainer.scrollHeight);
     }
   };
 
@@ -204,11 +250,10 @@ function App() {
       
       if (isRecentMessage) {
         // 只有真正的新消息才滚动
-        setTimeout(() => scrollToBottom(false), 100);
-        // 不重置保存的滚动位置，让页面切换逻辑独立处理
+        setTimeout(() => scrollToBottom(true), 100);
       }
     }
-  }, [messages]);
+  }, [messages, currentTab]);
 
   // 处理发送消息
   const handleSendMessage = async (text) => {
@@ -223,8 +268,8 @@ function App() {
 
     setMessages(prev => [...prev, userMessage]);
     
-    // 发送用户消息后平滑滚动到底部
-    setTimeout(() => scrollToBottom(true), 100);
+    // 发送用户消息后立即滚动到底部
+    setTimeout(() => scrollToBottom(true), 50);
 
     const loadingMessage = {
       id: Date.now() + 1,
@@ -721,6 +766,58 @@ function App() {
   };
 
   const MemoryLibrary = () => {
+    // 获取当前显示的记忆列表
+    const getCurrentMemories = () => {
+      switch (memoryViewType) {
+        case 'personal':
+          return personalMemories;
+        case 'instruction':
+          return instructionMemories;
+        default:
+          return memories;
+      }
+    };
+
+    // 获取记忆类型标签
+    const getMemoryTypeTag = (memory) => {
+      if (memory.memoryType === 'personal') {
+        return <Tag color="blue">💭 个人记忆</Tag>;
+      } else if (memory.memoryType === 'instruction') {
+        return <Tag color="green">⚡ 指令记忆</Tag>;
+      }
+      return null;
+    };
+
+    // 获取副标签
+    const getSubTag = (memory) => {
+      if (memory.memoryType === 'instruction') {
+        return <Tag color="orange">{memory.domain}</Tag>;
+      } else {
+        return (
+          <Tag 
+            color={
+              memory.category === '个人信息' ? 'blue' :
+              memory.category === '人生规划' ? 'green' :
+              memory.category === '个人价值' ? 'purple' :
+              memory.category === '个人成就' ? 'gold' :
+              memory.category === '生活习惯' ? 'cyan' :
+              memory.category === '人际关系' ? 'magenta' :
+              'default'
+            }
+            style={{ 
+              fontSize: '12px', 
+              padding: '2px 8px',
+              borderRadius: '6px',
+              fontWeight: 'bold',
+              flexShrink: 0
+            }}
+          >
+            {memory.category}
+          </Tag>
+        );
+      }
+    };
+
     // 预览记忆
     const previewMemory = (memory) => {
       Modal.info({
@@ -786,14 +883,15 @@ function App() {
                 {memory.title || '记忆详情'}
               </h2>
               <div style={{ marginTop: '12px', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                {getMemoryTypeTag(memory)}
                 <Tag color="blue" style={{ fontSize: '13px', padding: '4px 12px' }}>
                   {memory.category}
                 </Tag>
-                {memory.tags && memory.tags.split(',').filter(tag => tag.trim()).map(tag => (
-                  <Tag key={tag.trim()} color="green" style={{ fontSize: '13px', padding: '4px 12px' }}>
-                    {tag.trim()}
+                {memory.instructionType && (
+                  <Tag color="purple" style={{ fontSize: '13px', padding: '4px 12px' }}>
+                    {memory.instructionType}
                   </Tag>
-                ))}
+                )}
               </div>
             </div>
             
@@ -931,19 +1029,71 @@ function App() {
 
     return (
       <div style={{ padding: 24, height: "100vh", overflow: "auto" }} data-memory-scroll-container>
-        <Card title="记忆库">
-          {memories.length === 0 ? (
-            <Empty description="记忆库为空" />
+        <Card 
+          title={
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span>记忆库</span>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <Button
+                  icon={<ReloadOutlined />}
+                  onClick={async () => {
+                    try {
+                      const response = await fetch(`${API_BASE_URL}/api/memories`);
+                      if (response.ok) {
+                        const allMemories = await response.json();
+                        const personal = allMemories.filter(m => m.memoryType === 'personal');
+                        const instruction = allMemories.filter(m => m.memoryType === 'instruction');
+                        
+                        setPersonalMemories(personal);
+                        setInstructionMemories(instruction);
+                        
+                        message.success(`记忆库已刷新 (${allMemories.length}条记忆)`);
+                      }
+                    } catch (error) {
+                      message.error('刷新失败: ' + error.message);
+                    }
+                  }}
+                  size="small"
+                  title="刷新记忆库"
+                >
+                  刷新
+                </Button>
+                <span style={{ fontSize: '14px', color: '#666' }}>记忆类型:</span>
+                <Select
+                  value={memoryViewType}
+                  onChange={setMemoryViewType}
+                  style={{ width: 120 }}
+                  size="small"
+                >
+                  <Option value="all">全部记忆</Option>
+                  <Option value="personal">💭 个人记忆</Option>
+                  <Option value="instruction">⚡ 指令记忆</Option>
+                </Select>
+                <Tag color={memoryViewType === 'personal' ? 'blue' : memoryViewType === 'instruction' ? 'green' : 'default'}>
+                  {getCurrentMemories().length} 条
+                </Tag>
+              </div>
+            </div>
+          }
+        >
+          {getCurrentMemories().length === 0 ? (
+            <Empty description={
+              memoryViewType === 'personal' ? '暂无个人记忆' :
+              memoryViewType === 'instruction' ? '暂无指令记忆' :
+              '记忆库为空'
+            } />
           ) : (
             <List
-              dataSource={memories}
+              dataSource={getCurrentMemories()}
               renderItem={(memory) => (
                 <List.Item style={{ 
                   padding: '12px 16px', 
                   border: '2px solid #f0f0f0', 
                   borderRadius: '12px', 
                   marginBottom: '8px',
-                  background: 'linear-gradient(135deg, #ffffff 0%, #fafafa 100%)',
+                  background: memory.memoryType === 'instruction' 
+                    ? 'linear-gradient(135deg, #f6ffed 0%, #f0f9ff 100%)'
+                    : 'linear-gradient(135deg, #ffffff 0%, #fafafa 100%)',
                   boxShadow: '0 2px 8px rgba(0,0,0,0.06)',
                   transition: 'all 0.3s ease',
                   cursor: 'pointer',
@@ -966,27 +1116,9 @@ function App() {
                     gap: 16
                   }}>
                     {/* 标签+标题列 */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                      <Tag 
-                        color={
-                          memory.category === '个人信息' ? 'blue' :
-                          memory.category === '人生规划' ? 'green' :
-                          memory.category === '个人价值' ? 'purple' :
-                          memory.category === '个人成就' ? 'gold' :
-                          memory.category === '生活习惯' ? 'cyan' :
-                          memory.category === '人际关系' ? 'magenta' :
-                          'default'
-                        }
-                        style={{ 
-                          fontSize: '12px', 
-                          padding: '2px 8px',
-                          borderRadius: '6px',
-                          fontWeight: 'bold',
-                          flexShrink: 0
-                        }}
-                      >
-                        {memory.category}
-                      </Tag>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                      {getMemoryTypeTag(memory)}
+                      {getSubTag(memory)}
                       <Text strong style={{ 
                         fontSize: '18px', 
                         color: '#262626',
@@ -1086,9 +1218,18 @@ function App() {
         <Card
           title="🎯 指令中心"
           extra={
-            <Button icon={<ReloadOutlined />} onClick={loadInstructions} loading={instructionsLoading}>
-              刷新
-            </Button>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <Button 
+                type="primary" 
+                icon={<PlusOutlined />}
+                onClick={() => setShowCreateInstructionModal(true)}
+              >
+                新建指令
+              </Button>
+              <Button icon={<ReloadOutlined />} onClick={loadInstructions} loading={instructionsLoading}>
+                刷新
+              </Button>
+            </div>
           }
         >
           {laoziSession && (
@@ -1142,6 +1283,220 @@ function App() {
     );
   };
 
+  // 后台日志组件
+  const LogsPanel = () => {
+    return (
+      <div style={{ padding: 24, height: "100vh", overflow: "auto" }}>
+        <Card 
+          title={
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span>后台日志</span>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <Checkbox
+                  checked={autoRefreshLogs}
+                  onChange={(e) => setAutoRefreshLogs(e.target.checked)}
+                >
+                  自动刷新
+                </Checkbox>
+                <Button
+                  icon={<ReloadOutlined />}
+                  onClick={fetchLogs}
+                  size="small"
+                >
+                  刷新
+                </Button>
+              </div>
+            </div>
+          }
+        >
+          <div style={{ 
+            backgroundColor: '#000', 
+            color: '#00ff00', 
+            padding: '16px', 
+            borderRadius: '4px',
+            fontFamily: 'monospace',
+            fontSize: '12px',
+            height: '70vh',
+            overflow: 'auto'
+          }}>
+            {!logs || logs.length === 0 ? (
+              <div style={{ color: '#666' }}>暂无日志数据，点击刷新按钮加载</div>
+            ) : (
+              logs.map((line, index) => (
+                <div key={index} style={{ marginBottom: '2px' }}>
+                  {typeof line === 'string' ? line : (line.message || JSON.stringify(line))}
+                </div>
+              ))
+            )}
+          </div>
+        </Card>
+      </div>
+    );
+  };
+
+  // 创建指令模态框组件
+  const CreateInstructionModal = () => {
+    const [form] = Form.useForm();
+    const [loading, setLoading] = useState(false);
+
+    const handleSubmit = async (values) => {
+      setLoading(true);
+      try {
+        // 创建指令文件内容
+        const instructionContent = `---
+name: ${values.name}
+description: ${values.description}
+icon: ${values.icon}
+triggerMessage: ${values.triggerMessage}
+domain: ${values.domain}
+category: ${values.category}
+---
+
+# ${values.name}
+
+## 指令说明
+${values.description}
+
+## 对话流程
+${values.conversationFlow}
+
+## 评测标准
+${values.evaluationCriteria}
+
+## 记忆保存
+完成后自动保存到: 领域/${values.domain}/${values.name}记忆.md
+`;
+
+        // 保存指令文件
+        const response = await fetch(`${API_BASE_URL}/api/save-instruction`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: values.name,
+            content: instructionContent,
+            domain: values.domain
+          })
+        });
+
+        if (response.ok) {
+          message.success('指令创建成功！');
+          setShowCreateInstructionModal(false);
+          form.resetFields();
+          loadInstructions(); // 刷新指令列表
+        } else {
+          throw new Error('保存失败');
+        }
+      } catch (error) {
+        message.error('创建指令失败: ' + error.message);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    return (
+      <Modal
+        title="🎯 创建新指令"
+        open={showCreateInstructionModal}
+        onCancel={() => setShowCreateInstructionModal(false)}
+        footer={null}
+        width={800}
+      >
+        <Form
+          form={form}
+          layout="vertical"
+          onFinish={handleSubmit}
+        >
+          <Form.Item
+            name="name"
+            label="指令名称"
+            rules={[{ required: true, message: '请输入指令名称' }]}
+          >
+            <Input placeholder="例如：健康管理师" />
+          </Form.Item>
+
+          <Form.Item
+            name="description"
+            label="指令描述"
+            rules={[{ required: true, message: '请输入指令描述' }]}
+          >
+            <Input placeholder="例如：专业的健康管理和生活指导" />
+          </Form.Item>
+
+          <Form.Item
+            name="icon"
+            label="图标"
+            rules={[{ required: true, message: '请选择图标' }]}
+          >
+            <Select placeholder="选择图标">
+              <Select.Option value="🏥">🏥 医疗健康</Select.Option>
+              <Select.Option value="💰">💰 财务管理</Select.Option>
+              <Select.Option value="📚">📚 学习教育</Select.Option>
+              <Select.Option value="🎯">🎯 目标规划</Select.Option>
+              <Select.Option value="🧘">🧘 心理咨询</Select.Option>
+              <Select.Option value="🍳">🍳 生活助手</Select.Option>
+              <Select.Option value="💼">💼 职业发展</Select.Option>
+            </Select>
+          </Form.Item>
+
+          <Form.Item
+            name="triggerMessage"
+            label="触发消息"
+            rules={[{ required: true, message: '请输入触发消息' }]}
+          >
+            <Input placeholder="例如：我要健康管理" />
+          </Form.Item>
+
+          <Form.Item
+            name="domain"
+            label="领域分类"
+            rules={[{ required: true, message: '请选择领域' }]}
+          >
+            <Select placeholder="选择领域">
+              <Select.Option value="健康管理">健康管理</Select.Option>
+              <Select.Option value="财务管理">财务管理</Select.Option>
+              <Select.Option value="学习成长">学习成长</Select.Option>
+              <Select.Option value="生活助手">生活助手</Select.Option>
+              <Select.Option value="职业发展">职业发展</Select.Option>
+            </Select>
+          </Form.Item>
+
+          <Form.Item
+            name="conversationFlow"
+            label="对话流程"
+            rules={[{ required: true, message: '请描述对话流程' }]}
+          >
+            <Input.TextArea 
+              rows={4}
+              placeholder="描述指令的对话流程，例如：&#10;1. 询问用户基本健康状况&#10;2. 了解生活习惯和饮食偏好&#10;3. 制定个性化健康计划&#10;4. 提供持续跟踪建议"
+            />
+          </Form.Item>
+
+          <Form.Item
+            name="evaluationCriteria"
+            label="评测标准"
+            rules={[{ required: true, message: '请描述评测标准' }]}
+          >
+            <Input.TextArea 
+              rows={3}
+              placeholder="描述如何评估用户状态，例如：&#10;- 健康意识水平&#10;- 生活习惯规律性&#10;- 改善意愿强度"
+            />
+          </Form.Item>
+
+          <Form.Item>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <Button onClick={() => setShowCreateInstructionModal(false)}>
+                取消
+              </Button>
+              <Button type="primary" htmlType="submit" loading={loading}>
+                创建指令
+              </Button>
+            </div>
+          </Form.Item>
+        </Form>
+      </Modal>
+    );
+  };
+
   // 设置面板组件
   const SettingsPanel = () => {
     return (
@@ -1174,58 +1529,17 @@ function App() {
     );
   };
 
-  // 日志面板组件
-  const LogsPanel = () => {
-    return (
-      <div style={{ padding: 24, height: "100vh", overflow: "auto" }}>
-        <Card title="运行日志">
-          {logs.length === 0 ? (
-            <Empty description="暂无日志记录" />
-          ) : (
-            <div style={{ maxHeight: "calc(100vh - 200px)", overflow: "auto" }}>
-              {logs.map((log, index) => (
-                <div
-                  key={index}
-                  style={{
-                    marginBottom: 12,
-                    padding: 12,
-                    borderLeft: `4px solid ${
-                      log.type === "success" ? "#52c41a" :
-                      log.type === "error" ? "#ff4d4f" :
-                      log.type === "warning" ? "#faad14" : "#1890ff"
-                    }`,
-                    backgroundColor: "#f5f5f5",
-                    borderRadius: 4,
-                  }}
-                >
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <Text strong>{log.message}</Text>
-                    <Text type="secondary" style={{ fontSize: 12 }}>
-                      {log.timestamp}
-                    </Text>
-                  </div>
-                  {log.details && (
-                    <div style={{ marginTop: 8, fontSize: 12, color: "#666" }}>
-                      {log.details}
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-        </Card>
-      </div>
-    );
-  };
-
   // 渲染内容
   const renderContent = () => {
+    console.log('当前标签页:', currentTab);
     switch (currentTab) {
       case 'chat': return <ChatPanel />;
       case 'memory': return <MemoryLibrary />;
       case 'workflow': return <WorkflowPanel />;
       case 'settings': return <SettingsPanel />;
-      case 'logs': return <LogsPanel />;
+      case 'logs': 
+        console.log('渲染日志页面');
+        return <LogsPanel />;
       default: return <ChatPanel />;
     }
   };
@@ -1320,6 +1634,28 @@ function App() {
               onClick: () => switchToOtherTab("workflow")
             },
             {
+              key: "logs",
+              icon: <InfoCircleOutlined style={{ fontSize: '18px', color: '#13c2c2' }} />,
+              label: (
+                <span style={{ 
+                  fontSize: '16px', 
+                  fontWeight: currentTab === 'logs' ? 'bold' : 'normal',
+                  marginLeft: '8px'
+                }}>
+                  后台日志
+                </span>
+              ),
+              style: {
+                height: '56px',
+                lineHeight: '56px',
+                margin: '8px 0',
+                borderRadius: '12px',
+                backgroundColor: currentTab === 'logs' ? '#e6fffb' : 'transparent',
+                border: currentTab === 'logs' ? '2px solid #13c2c2' : '2px solid transparent'
+              },
+              onClick: () => switchToOtherTab("logs")
+            },
+            {
               key: "settings",
               icon: <SettingOutlined style={{ fontSize: '18px', color: '#722ed1' }} />,
               label: (
@@ -1340,28 +1676,6 @@ function App() {
                 border: currentTab === 'settings' ? '2px solid #722ed1' : '2px solid transparent'
               },
               onClick: () => switchToOtherTab("settings")
-            },
-            {
-              key: "logs",
-              icon: <InfoCircleOutlined style={{ fontSize: '18px', color: '#eb2f96' }} />,
-              label: (
-                <span style={{ 
-                  fontSize: '16px', 
-                  fontWeight: currentTab === 'logs' ? 'bold' : 'normal',
-                  marginLeft: '8px'
-                }}>
-                  运行日志
-                </span>
-              ),
-              style: {
-                height: '56px',
-                lineHeight: '56px',
-                margin: '8px 0',
-                borderRadius: '12px',
-                backgroundColor: currentTab === 'logs' ? '#fff0f6' : 'transparent',
-                border: currentTab === 'logs' ? '2px solid #eb2f96' : '2px solid transparent'
-              },
-              onClick: () => switchToOtherTab("logs")
             }
           ]}
         />
@@ -1402,6 +1716,7 @@ function App() {
       <Layout>
         <Content style={{ height: "100vh", overflow: "hidden" }}>
           {renderContent()}
+          <CreateInstructionModal />
         </Content>
       </Layout>
     </Layout>
