@@ -3,7 +3,7 @@ const isDevelopment = import.meta.env.DEV;
 
 // 后端地址配置
 const LOCAL_BACKEND_URL = 'http://localhost:3001';
-const PRODUCTION_BACKEND_URL = 'https://gen-appropriations-switches-presentations.trycloudflare.com';
+const PRODUCTION_BACKEND_URL = 'http://bore.pub:29498';
 
 // 自动选择后端地址
 export const API_BASE_URL = isDevelopment ? LOCAL_BACKEND_URL : PRODUCTION_BACKEND_URL;
