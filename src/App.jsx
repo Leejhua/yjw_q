@@ -308,7 +308,7 @@ function App() {
   // Q CLI对话
   const chatWithQCli = async (userMessage, relevantMemories) => {
     try {
-      const response = await fetch(${API_BASE_URL}/api/chat-with-q, {
+      const response = await fetch(`${API_BASE_URL}/api/chat-with-q`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -328,8 +328,8 @@ function App() {
       // 如果Q CLI执行了文件操作，刷新记忆库
       if (data.response && data.response.includes('fs_write')) {
         try {
-          await fetch(`${${API_BASE_URL}/api/memories}/refresh`, { method: 'POST' });
-          const memResponse = await fetch(${API_BASE_URL}/api/memories);
+          await fetch(`${API_BASE_URL}/api/memories/refresh`, { method: 'POST' });
+          const memResponse = await fetch(`${API_BASE_URL}/api/memories`);
           if (memResponse.ok) {
             const updatedMemories = await memResponse.json();
             setMemories(updatedMemories);
@@ -392,7 +392,7 @@ function App() {
       setLaoziSession(null);
       
       // 2. 调用后端API清除会话
-      await fetch('${API_BASE_URL}/api/laozi-session/default/reset', {
+      await fetch(`${API_BASE_URL}/api/laozi-session/default/reset`, {
         method: 'POST'
       });
       
@@ -841,7 +841,7 @@ function App() {
             const scrollTop = scrollContainer ? scrollContainer.scrollTop : 0;
             
             // 调用后端API删除记忆文件
-            const response = await fetch(`${${API_BASE_URL}/api/memories}/${memory.filename}`, {
+            const response = await fetch(`${API_BASE_URL}/api/memories/${memory.filename}`, {
               method: 'DELETE'
             });
             
@@ -890,7 +890,7 @@ function App() {
     // 保存编辑后的记忆
     const handleSaveMemory = async (originalMemory, updatedMemory) => {
       try {
-        const response = await fetch(`${${API_BASE_URL}/api/memories}/${originalMemory.filename}`, {
+        const response = await fetch(`${API_BASE_URL}/api/memories/${originalMemory.filename}`, {
           method: 'PUT',
           headers: {
             'Content-Type': 'application/json'

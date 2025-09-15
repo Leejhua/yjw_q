@@ -1,21 +1,14 @@
 version: '3.8'
 
 services:
-  ai-backend:
-    build:
-      context: .
-      dockerfile: Dockerfile.q-base
+  ai-assistant:
+    build: .
     ports:
       - "3001:3001"
-    volumes:
-      - ~/.aws:/home/quser/.aws:ro  # 挂载 AWS 认证
-      - ./uploads:/home/quser/workspace/uploads
     environment:
       - NODE_ENV=production
-      - Q_LOG_LEVEL=info
+      - PORT=3001
+    volumes:
+      - ./个人记忆:/home/quser/app/个人记忆
+      - ./uploads:/home/quser/app/uploads
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
