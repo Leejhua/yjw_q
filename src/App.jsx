@@ -77,7 +77,19 @@ function App() {
       }
     } catch (error) {
       console.error('检查Q CLI状态失败:', error);
-      setQCliStatus({ available: false, sessions: 0 });
+      
+      // 检查是否是HTTPS/HTTP混合内容问题
+      if (error.message.includes('Mixed Content') || 
+          error.message.includes('blocked') ||
+          window.location.protocol === 'https:' && API_BASE_URL.startsWith('http:')) {
+        setQCliStatus({ 
+          available: false, 
+          sessions: 0, 
+          error: 'HTTPS页面无法访问HTTP后端，请使用HTTPS隧道或允许不安全内容' 
+        });
+      } else {
+        setQCliStatus({ available: false, sessions: 0, error: error.message });
+      }
     }
     return false;
   };
