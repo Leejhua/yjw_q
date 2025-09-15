@@ -13,8 +13,13 @@ const PORT = process.env.PORT || 3001;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// 中间件
-app.use(cors());
+// 中间件 - 允许所有来源访问
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: false
+}));
 app.use(express.json({ limit: '10mb' }));
 
 // 配置multer用于文件上传
@@ -1053,7 +1058,10 @@ ${memoryContext}
 
 // API端点：检查Q CLI状态
 app.get('/api/q-status', async (req, res) => {
+  const clientIP = req.ip || req.connection.remoteAddress;
+  const userAgent = req.get('User-Agent');
   console.log(`\n🔍 [${new Date().toISOString()}] 检查Q CLI状态请求`);
+  console.log(`📱 客户端: ${clientIP}, UA: ${userAgent?.substring(0, 50)}...`);
   
   try {
     const startTime = Date.now();
@@ -1070,7 +1078,11 @@ app.get('/api/q-status', async (req, res) => {
       sessions: qSessions.size,
       debug: {
         timestamp: new Date().toISOString(),
-        checkDuration: duration
+        checkDuration: duration,
+        clientInfo: {
+          ip: clientIP,
+          userAgent: userAgent?.substring(0, 100)
+        }
       }
     });
   } catch (error) {
