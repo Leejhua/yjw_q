@@ -22,3 +22,15 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+# 部署相关文件
+*.log
+bore*
+cloudflared*
+tunnel*
+render.yaml
+railway.json
+Dockerfile*
+docker-compose.yml
+start-*.sh
+keep-*.sh
+vercel.json
