@@ -1,14 +1,16 @@
-// API配置 - 本地开发模式
+// API配置
 const isDevelopment = import.meta.env.DEV;
 
-// 本地后端地址
+// 后端地址配置
 const LOCAL_BACKEND_URL = 'http://localhost:3001';
+const PRODUCTION_BACKEND_URL = 'https://oclc-alice-supporting-mega.trycloudflare.com';
 
-export const API_BASE_URL = LOCAL_BACKEND_URL;
+// 自动选择后端地址
+export const API_BASE_URL = isDevelopment ? LOCAL_BACKEND_URL : PRODUCTION_BACKEND_URL;
 
 console.log('🔧 API配置:', {
   isDevelopment,
   API_BASE_URL,
-  mode: '本地模式',
+  mode: isDevelopment ? '本地模式' : '生产模式',
   currentHost: window.location.host
 });
