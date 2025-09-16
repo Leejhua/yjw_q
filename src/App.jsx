@@ -56,12 +56,11 @@ function App() {
   const [currentTab, setCurrentTab] = useState("chat");
   const [logs, setLogs] = useState([]);
   const [messages, setMessages] = useState([]);
-  const [chatScrollPosition, setChatScrollPosition] = useState(0); // 保存聊天页面滚动位置
   const [memories, setMemories] = useState([]);
   const [personalMemories, setPersonalMemories] = useState([]);
   const [instructionMemories, setInstructionMemories] = useState([]);
   const [memoryViewType, setMemoryViewType] = useState('all');
-  const [autoRefreshLogs, setAutoRefreshLogs] = useState(false); // 'all', 'personal', 'instruction'
+  const [autoRefreshLogs, setAutoRefreshLogs] = useState(false);
   const [selectedMemories, setSelectedMemories] = useState([]);
   const [workflows, setWorkflows] = useState([]);
   const [apiKey, setApiKey] = useState("");
@@ -159,7 +158,7 @@ function App() {
   const loadInstructions = async () => {
     setInstructionsLoading(true);
     try {
-      const response = await fetch(`${API_BASE_URL}/api/instructions`);
+      const response = await fetch(`${API_BASE_URL}/api/instructions-new`);
       if (response.ok) {
         const data = await response.json();
         if (data.success) {
@@ -188,73 +187,6 @@ function App() {
     }
   };
 
-  // 保存和恢复聊天滚动位置
-  const saveChatScrollPosition = () => {
-    const scrollContainer = document.querySelector('[data-chat-scroll-container]');
-    if (scrollContainer) {
-      setChatScrollPosition(scrollContainer.scrollTop);
-    }
-  };
-
-  const restoreChatScrollPosition = () => {
-    const scrollContainer = document.querySelector('[data-chat-scroll-container]');
-    if (scrollContainer) {
-      // 直接恢复到离开时的位置，不使用动画
-      scrollContainer.scrollTop = chatScrollPosition;
-    }
-  };
-
-  // 监听页面切换 - 只负责恢复位置
-  useEffect(() => {
-    if (currentTab === 'chat') {
-      // 只在没有新消息时恢复滚动位置
-      const hasRecentMessage = messages.length > 0 && 
-        (new Date() - new Date(messages[messages.length - 1].timestamp)) < 5000;
-      
-      if (!hasRecentMessage) {
-        restoreChatScrollPosition();
-      }
-    }
-  }, [currentTab]);
-
-  // 智能滚动到底部 - 聊天应用的默认行为
-  const scrollToBottom = (force = false) => {
-    if (currentTab !== 'chat') return;
-    
-    const scrollContainer = document.querySelector('[data-chat-scroll-container]');
-    if (!scrollContainer) return;
-    
-    // 检查用户是否在明显查看历史消息（距离底部超过200px）
-    const distanceFromBottom = scrollContainer.scrollHeight - scrollContainer.scrollTop - scrollContainer.clientHeight;
-    const isViewingHistory = distanceFromBottom > 200;
-    
-    // 强制滚动或用户不在查看历史时才滚动
-    if (force || !isViewingHistory) {
-      scrollContainer.scrollTo({
-        top: scrollContainer.scrollHeight,
-        behavior: 'smooth'
-      });
-      // 清除保存的滚动位置，因为我们已经滚动到底部
-      setChatScrollPosition(scrollContainer.scrollHeight);
-    }
-  };
-
-  // 监听消息变化 - 只在有新消息且当前在聊天页面时滚动
-  useEffect(() => {
-    if (currentTab === 'chat' && messages.length > 0) {
-      // 检查是否是真正的新消息（避免页面切换时触发）
-      const lastMessage = messages[messages.length - 1];
-      const now = new Date();
-      const messageTime = new Date(lastMessage.timestamp);
-      const isRecentMessage = (now - messageTime) < 2000; // 2秒内的消息
-      
-      if (isRecentMessage) {
-        // 只有真正的新消息才滚动
-        setTimeout(() => scrollToBottom(true), 100);
-      }
-    }
-  }, [messages, currentTab]);
-
   // 处理发送消息
   const handleSendMessage = async (text) => {
     if (!text?.trim()) return;
@@ -267,9 +199,6 @@ function App() {
     };
 
     setMessages(prev => [...prev, userMessage]);
-    
-    // 发送用户消息后立即滚动到底部
-    setTimeout(() => scrollToBottom(true), 50);
 
     const loadingMessage = {
       id: Date.now() + 1,
@@ -279,9 +208,6 @@ function App() {
       loading: true,
     };
     setMessages(prev => [...prev, loadingMessage]);
-    
-    // 显示loading消息后平滑滚动到底部
-    setTimeout(() => scrollToBottom(true), 150);
 
     try {
       const relevantMemories = findRelevantMemories(text);
@@ -294,14 +220,11 @@ function App() {
                 ...msg, 
                 content: result.response, 
                 loading: false, 
-                references: result.actuallyUsedMemories // 使用实际使用的记忆
+                references: result.actuallyUsedMemories
               }
             : msg
         )
       );
-      
-      // AI回复完成后滚动到最新消息
-      setTimeout(() => scrollToBottom(false), 150);
 
       // 检测老祖会话状态变化
       if (result.response.includes('AI修仙老祖评测已完成')) {
@@ -419,23 +342,14 @@ function App() {
     setLogs(prev => [newLog, ...prev.slice(0, 19)]);
   };
 
-  // 切换到聊天页面的函数
-  const switchToChat = () => {
-    setCurrentTab("chat");
-  };
-
-  // 切换到其他页面的函数
-  const switchToOtherTab = (tabName) => {
-    // 如果当前在聊天页面，先保存滚动位置
-    if (currentTab === 'chat') {
-      saveChatScrollPosition();
-    }
+  // 切换标签页
+  const switchToTab = (tabName) => {
     setCurrentTab(tabName);
   };
 
   // 执行指令
   const executeInstruction = (instruction) => {
-    switchToChat();
+    switchToTab("chat");
     setTimeout(() => {
       handleSendMessage(instruction.triggerMessage);
     }, 200);
@@ -468,6 +382,23 @@ function App() {
   // 聊天面板组件
   const ChatPanel = () => {
     const [inputText, setInputText] = useState("");
+    const endRef = useRef(null); // 用于滚动到底部的锚点
+    
+    // 滚动到底部的函数
+    const scrollToBottom = () => {
+      if (endRef.current) {
+        requestAnimationFrame(() => {
+          endRef.current.scrollIntoView({ behavior: 'smooth' });
+        });
+      }
+    };
+
+    // 监听messages变化，自动滚动到底部
+    useEffect(() => {
+      if (messages.length > 0) {
+        scrollToBottom();
+      }
+    }, [messages]);
     
     const handleKeyDown = (e) => {
       if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
@@ -503,13 +434,12 @@ function App() {
         )}
         
         <div 
-          data-chat-scroll-container 
           style={{ 
             flex: 1,
-            overflow: "auto", 
+            height: "calc(100vh - 200px)", // 固定高度
+            overflow: "auto", // 启用滚动
+            overflowY: "auto", // 明确启用垂直滚动
             padding: 24,
-            scrollBehavior: "auto", // 移除平滑滚动，使用瞬间定位
-            overflowAnchor: "auto" // 防止滚动锚点问题
           }}
         >
           <Card 
@@ -535,10 +465,10 @@ function App() {
 
           <List
             dataSource={messages}
-            split={false} // 移除分割线，减少重绘
+            split={false}
             renderItem={(message) => (
               <List.Item
-                key={message.id} // 稳定的key避免重新渲染
+                key={message.id} // 使用稳定的唯一key
                 style={{
                   padding: "24px 20px",
                   borderBottom: "none",
@@ -635,6 +565,9 @@ function App() {
               </List.Item>
             )}
           />
+          
+          {/* 滚动锚点 */}
+          <div ref={endRef} />
         </div>
 
         <div style={{ 
@@ -1587,7 +1520,7 @@ ${values.evaluationCriteria}
                 backgroundColor: currentTab === 'chat' ? '#e6f7ff' : 'transparent',
                 border: currentTab === 'chat' ? '2px solid #1890ff' : '2px solid transparent'
               },
-              onClick: () => switchToChat()
+              onClick: () => switchToTab("chat")
             },
             {
               key: "memory",
@@ -1609,7 +1542,7 @@ ${values.evaluationCriteria}
                 backgroundColor: currentTab === 'memory' ? '#f6ffed' : 'transparent',
                 border: currentTab === 'memory' ? '2px solid #52c41a' : '2px solid transparent'
               },
-              onClick: () => switchToOtherTab("memory")
+              onClick: () => switchToTab("memory")
             },
             {
               key: "workflow",
@@ -1631,7 +1564,7 @@ ${values.evaluationCriteria}
                 backgroundColor: currentTab === 'workflow' ? '#fff7e6' : 'transparent',
                 border: currentTab === 'workflow' ? '2px solid #fa8c16' : '2px solid transparent'
               },
-              onClick: () => switchToOtherTab("workflow")
+              onClick: () => switchToTab("workflow")
             },
             {
               key: "logs",
@@ -1653,7 +1586,7 @@ ${values.evaluationCriteria}
                 backgroundColor: currentTab === 'logs' ? '#e6fffb' : 'transparent',
                 border: currentTab === 'logs' ? '2px solid #13c2c2' : '2px solid transparent'
               },
-              onClick: () => switchToOtherTab("logs")
+              onClick: () => switchToTab("logs")
             },
             {
               key: "settings",
@@ -1675,7 +1608,7 @@ ${values.evaluationCriteria}
                 backgroundColor: currentTab === 'settings' ? '#f9f0ff' : 'transparent',
                 border: currentTab === 'settings' ? '2px solid #722ed1' : '2px solid transparent'
               },
-              onClick: () => switchToOtherTab("settings")
+              onClick: () => switchToTab("settings")
             }
           ]}
         />
