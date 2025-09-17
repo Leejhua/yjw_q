@@ -1,0 +1,16 @@
+[Unit]
+Description=AI Backend Service
+After=network.target
+
+[Service]
+Type=simple
+User=yjw
+WorkingDirectory=/home/yjw/Ai-1.0
+ExecStart=/usr/bin/node server.js
+Restart=always
+RestartSec=10
+Environment=NODE_ENV=production
+Environment=PORT=3001
+
+[Install]
+WantedBy=multi-user.target

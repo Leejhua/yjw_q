@@ -1,0 +1,14 @@
+{
+  "name": "search-mcp-server",
+  "version": "1.0.0",
+  "description": "MCP server for web search capabilities",
+  "main": "search-mcp-server.js",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^0.4.0",
+    "axios": "^1.6.0",
+    "cheerio": "^1.0.0-rc.12"
+  },
+  "bin": {
+    "search-mcp-server": "./search-mcp-server.js"
+  }
+}

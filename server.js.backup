@@ -8,7 +8,7 @@ import { spawn, exec } from 'child_process';
 
 // 生产环境配置 - 禁用调试日志
 const DEBUG = process.env.NODE_ENV !== 'production';
-const log = DEBUG ? console.log : () => {};
+const log = DEBUG ? log : () => {};
 
 const app = express();
 
@@ -1044,11 +1044,18 @@ ${memoryContext}
 
     log('🚀 开始执行增强Q CLI命令...');
     const response = await new Promise((resolve, reject) => {
-      // 使用简单的Q CLI命令格式
-      const command = `echo "${enhancedPrompt.replace(/"/g, '\\"')}" | q chat --no-interactive --trust-all-tools`;
-      log(`📋 执行命令长度: ${command.length} 字符`);
+      // 创建临时文件来避免命令行参数问题
+      const tempFile = `/tmp/qcli_input_${Date.now()}.txt`;
       
-      exec(command, {
+      try {
+        // 写入临时文件
+        fs.writeFileSync(tempFile, enhancedPrompt, 'utf-8');
+        
+        // 使用文件输入方式
+        const command = `cat "${tempFile}" | q chat --no-interactive --trust-all-tools`;
+        log(`📋 执行命令: ${command}`);
+        
+        exec(command, {
           timeout: 60000, // 增加到60秒
           cwd: '/home/yjw/ai-', // 设置工作目录
           maxBuffer: 1024 * 1024 * 10, // 增加输出缓冲区到10MB
@@ -1060,6 +1067,13 @@ ${memoryContext}
             CI: '1'
           }
         }, (error, stdout, stderr) => {
+        // 清理临时文件
+        try {
+          fs.unlinkSync(tempFile);
+        } catch (cleanupError) {
+          log('⚠️ 清理临时文件失败:', cleanupError.message);
+        }
+        
         log(`⏱️  命令执行完成，耗时: ${Date.now() - startTime}ms`);
         
         if (error && !stdout) {
@@ -1120,8 +1134,11 @@ ${memoryContext}
           log('✨ 最终回复:', actualResponse.substring(0, 200) + '...');
           
           resolve(actualResponse || '抱歉，Q CLI没有返回有效回复');
-        }, 1000);
-      });
+        }, 1000); // 等待1秒确保文件操作完成
+      } catch (fileError) {
+        log('❌ 临时文件创建失败:', fileError.message);
+        resolve('临时文件创建失败: ' + fileError.message);
+      }
     });
 
     log(`🎉 Q CLI响应成功，总耗时: ${Date.now() - startTime}ms`);

@@ -6,10 +6,6 @@ import multer from 'multer';
 import { fileURLToPath } from 'url';
 import { spawn, exec } from 'child_process';
 
-// 生产环境配置 - 禁用调试日志
-const DEBUG = process.env.NODE_ENV !== 'production';
-const log = DEBUG ? console.log : () => {};
-
 const app = express();
 
 // 中间件 - 必须在所有路由之前设置
@@ -61,10 +57,6 @@ app.get('/api/instructions-new', async (req, res) => {
             
             // 只有包含name字段的文件才被认为是指令文件
             if (metadata.name) {
-              // 从文件路径中提取domain
-              const relativePath = path.relative(instructionsDir, fullPath);
-              const domain = relativePath.split(path.sep)[0];
-              
               instructions.push({
                 id: item.name.replace('.md', ''),
                 name: metadata.name,
@@ -72,8 +64,7 @@ app.get('/api/instructions-new', async (req, res) => {
                 icon: metadata.icon || '🎯',
                 filename: item.name,
                 triggerMessage: metadata.triggerMessage || `启动${metadata.name}`,
-                filePath: fullPath,
-                domain: domain
+                filePath: fullPath
               });
             }
           } catch (error) {
@@ -90,6 +81,58 @@ app.get('/api/instructions-new', async (req, res) => {
     res.status(500).json({ success: false, error: error.message });
   }
 });
+
+// 通用Q CLI调用函数，使用临时文件避免参数过长
+async function callQCLI(prompt) {
+  return new Promise((resolve, reject) => {
+    // 使用临时文件避免命令行参数过长
+    const tempFile = path.join(__dirname, `temp_prompt_${Date.now()}.txt`);
+    fs.writeFileSync(tempFile, prompt);
+    
+    const command = `q chat --no-interactive --trust-all-tools < "${tempFile}"`;
+    console.log(`📋 使用临时文件执行Q CLI调用`);
+    
+    const child = spawn('bash', ['-c', command], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      cwd: __dirname
+    });
+    
+    let output = '';
+    let errorOutput = '';
+    
+    child.stdout.on('data', (data) => {
+      output += data.toString();
+    });
+    
+    child.stderr.on('data', (data) => {
+      errorOutput += data.toString();
+    });
+    
+    child.on('close', (code) => {
+      // 清理临时文件
+      try {
+        fs.unlinkSync(tempFile);
+      } catch (e) {
+        console.log('临时文件清理失败:', e.message);
+      }
+      
+      if (code === 0) {
+        resolve(output.trim());
+      } else {
+        reject(new Error(`Q CLI执行失败: ${errorOutput || output}`));
+      }
+    });
+    
+    // 设置超时
+    setTimeout(() => {
+      child.kill();
+      try {
+        fs.unlinkSync(tempFile);
+      } catch (e) {}
+      reject(new Error('Q CLI调用超时'));
+    }, 30000);
+  });
+}
 
 const PORT = process.env.PORT || 3001;
 
@@ -133,7 +176,7 @@ function cleanupExpiredSessions() {
     const sessionAge = now - new Date(session.createdAt).getTime();
     if (sessionAge > expireTime) {
       userSessions.delete(userId);
-      log(`🧹 清理过期会话: ${userId}`);
+      console.log(`🧹 清理过期会话: ${userId}`);
     }
   }
 }
@@ -146,7 +189,7 @@ app.post('/api/init-session', (req, res) => {
   const userId = generateUserId();
   const session = getUserSession(userId);
   
-  log(`🆕 创建新用户会话: ${userId}`);
+  console.log(`🆕 创建新用户会话: ${userId}`);
   
   res.json({
     success: true,
@@ -193,7 +236,7 @@ setInterval(() => {
         session.process.kill();
       }
       qSessions.delete(sessionId);
-      log(`🧹 清理过期Q CLI会话: ${sessionId}`);
+      console.log(`🧹 清理过期Q CLI会话: ${sessionId}`);
     }
   }
 }, 60000); // 每分钟检查一次
@@ -255,19 +298,19 @@ function getQSession(sessionId) {
   });
 
   qProcess.on('exit', (code) => {
-    log(`Q CLI进程退出，代码: ${code}`);
+    console.log(`Q CLI进程退出，代码: ${code}`);
     qSessions.delete(sessionId);
   });
 
   qSessions.set(sessionId, session);
-  log(`🚀 创建新的Q CLI会话: ${sessionId}`);
+  console.log(`🚀 创建新的Q CLI会话: ${sessionId}`);
   
   return session;
 }
 
 // 检查Q CLI是否可用
 async function checkQCliAvailable() {
-  log('🔍 开始检查Q CLI可用性...');
+  console.log('🔍 开始检查Q CLI可用性...');
   
   return new Promise((resolve) => {
     const startTime = Date.now();
@@ -282,38 +325,38 @@ async function checkQCliAvailable() {
     testProcess.stdout.on('data', (data) => {
       hasOutput = true;
       outputData += data.toString();
-      log('📤 Q CLI测试输出:', data.toString().substring(0, 100));
+      console.log('📤 Q CLI测试输出:', data.toString().substring(0, 100));
     });
     
     testProcess.stderr.on('data', (data) => {
-      log('⚠️  Q CLI测试错误输出:', data.toString());
+      console.log('⚠️  Q CLI测试错误输出:', data.toString());
     });
     
     testProcess.on('exit', (code) => {
       const duration = Date.now() - startTime;
-      log(`🏁 Q CLI测试进程退出，代码: ${code}, 耗时: ${duration}ms, 有输出: ${hasOutput}`);
+      console.log(`🏁 Q CLI测试进程退出，代码: ${code}, 耗时: ${duration}ms, 有输出: ${hasOutput}`);
       resolve(code === 0 && hasOutput);
     });
     
     testProcess.on('error', (error) => {
       const duration = Date.now() - startTime;
-      log('❌ Q CLI测试错误:', error.message, `耗时: ${duration}ms`);
+      console.log('❌ Q CLI测试错误:', error.message, `耗时: ${duration}ms`);
       resolve(false);
     });
     
-    // 15秒超时
+    // 5秒超时
     setTimeout(() => {
-      log('⏰ Q CLI测试超时，强制结束');
+      console.log('⏰ Q CLI测试超时，强制结束');
       testProcess.kill();
       resolve(false);
-    }, 15000);
+    }, 5000);
   });
 }
 
 // 提取Q CLI实际回复内容
 function extractQResponse(rawOutput) {
-  log('🔧 开始提取Q CLI回复内容...');
-  log('📥 原始输入长度:', rawOutput.length);
+  console.log('🔧 开始提取Q CLI回复内容...');
+  console.log('📥 原始输入长度:', rawOutput.length);
   
   // 温和清理，主要移除格式代码但保留内容
   let cleanOutput = rawOutput
@@ -347,15 +390,15 @@ function extractQResponse(rawOutput) {
     .replace(/\n\s*\n\s*\n+/g, '\n\n')
     .trim();
   
-  log('🧹 清理后长度:', cleanOutput.length);
-  log('🧹 清理后内容预览:', cleanOutput.substring(0, 300));
+  console.log('🧹 清理后长度:', cleanOutput.length);
+  console.log('🧹 清理后内容预览:', cleanOutput.substring(0, 300));
   
   if (cleanOutput && cleanOutput.length > 5) {
-    log('✅ 提取成功，返回清理后内容');
+    console.log('✅ 提取成功，返回清理后内容');
     return cleanOutput;
   }
   
-  log('❌ 提取失败，返回原始内容');
+  console.log('❌ 提取失败，返回原始内容');
   return rawOutput.replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, '').trim();
 }
 
@@ -373,75 +416,67 @@ function formatMarkdown(text) {
 // API端点：Q CLI对话 - 增强版本
 app.post('/api/chat-with-q', async (req, res) => {
   const startTime = Date.now();
-  log(`\n🔵 [${new Date().toISOString()}] Q CLI增强请求开始`);
-  log(`📝 请求内容:`, JSON.stringify(req.body));
+  console.log(`\n🔵 [${new Date().toISOString()}] Q CLI增强请求开始`);
+  console.log(`📝 请求内容:`, JSON.stringify(req.body));
   
   try {
     const { message, sessionId = 'default', memories = [] } = req.body;
-    log('=== 📨 收到消息 ===', message);
-    log('=== 🔍 开始处理请求 ===');
+    console.log('=== 📨 收到消息 ===', message);
+    console.log('=== 🔍 开始处理请求 ===');
     
     let enhancedPrompt = message; // 初始化变量
     let isInstructionCall = false; // 初始化指令调用标志
     let instructionContent = '';
     
     if (!message) {
-      log('❌ 错误: 消息为空');
+      console.log('❌ 错误: 消息为空');
       return res.status(400).json({ error: '消息不能为空' });
     }
 
     // 优先检查新指令启动（老祖和通用指令）
     // 检查通用指令启动
-    log('🔍 开始检查通用指令...');
+    console.log('🔍 开始检查通用指令...');
     try {
       const allInstructions = await getAllInstructions();
-      log('📋 找到指令:', allInstructions.map(i => i.name));
+      console.log('📋 找到指令:', allInstructions.map(i => i.name));
       
       const matchedInstruction = allInstructions.find(inst => 
         message.trim() === inst.triggerMessage.replace(/"/g, '') || 
         message.includes(inst.triggerMessage.replace(/"/g, ''))
       );
       
-      log('🎯 匹配结果:', matchedInstruction ? matchedInstruction.name : '无匹配');
+      console.log('🎯 匹配结果:', matchedInstruction ? matchedInstruction.name : '无匹配');
       
       if (matchedInstruction && matchedInstruction.name.replace(/"/g, '') !== 'AI修仙老祖') {
-        log(`🎯 检测到通用指令: ${matchedInstruction.name}`);
+        console.log(`🎯 检测到通用指令: ${matchedInstruction.name}`);
         
         const instructionPath = path.join(__dirname, '领域', matchedInstruction.domain, matchedInstruction.name.replace(/"/g, ''), '指令定义.md');
         let instructionContent = '';
         
         if (fs.existsSync(instructionPath)) {
           instructionContent = await fs.promises.readFile(instructionPath, 'utf-8');
-          log(`📋 ${matchedInstruction.name}指令文件读取成功`);
+          console.log(`📋 ${matchedInstruction.name}指令文件读取成功`);
         }
         
         // 对指令内容进行敏感词转换
-        log('📝 原始指令内容:', instructionContent.substring(0, 200) + '...');
+        console.log('📝 原始指令内容:', instructionContent.substring(0, 200) + '...');
         const { convertedText: convertedContent, hasConverted } = convertSensitiveWords(instructionContent);
-        log('🔄 敏感词转换结果:', hasConverted ? '已转换' : '无需转换');
-        log('📝 转换后内容:', convertedContent.substring(0, 200) + '...');
+        console.log('🔄 敏感词转换结果:', hasConverted ? '已转换' : '无需转换');
+        console.log('📝 转换后内容:', convertedContent.substring(0, 200) + '...');
         
         if (hasConverted) {
-          log(`🔄 已转换敏感词汇，使用安全表达`);
+          console.log(`🔄 已转换敏感词汇，使用安全表达`);
         }
         
-        // 直接使用指令内容，让Q CLI进入指令角色
+        // 直接使用转换后的指令内容，让Q CLI进入指令角色
         enhancedPrompt = convertedContent + `
 
-用户输入：${message}
+用户消息：${message}
 
-请严格按照上述指令定义执行，立即进入指令角色并开始提供专业服务。
-
-重要要求：
-1. 必须在回复开头显示进度提示，格式如下：
-   🔄 正在启动${matchedInstruction.name}...
-   📋 加载服务配置...
-   ✅ ${matchedInstruction.name}已就绪，开始为您服务
-
-2. 然后按照指令要求提供专业服务`;
+请严格按照上述指令要求执行，进入指令角色并开始服务。`;
         
         isInstructionCall = true;
-        log(`🔄 ${matchedInstruction.name}指令处理完成`);
+        console.log(`🔄 ${matchedInstruction.name}指令处理完成`);
       }
     } catch (error) {
       console.error('通用指令检测失败:', error);
@@ -449,14 +484,14 @@ app.post('/api/chat-with-q', async (req, res) => {
     
     // 检查老祖启动指令 - 使用翻译方式绕过roleplay限制
     if (!isInstructionCall && (message.includes('我要老祖') || message.includes('启动老祖') || message.trim() === '老祖')) {
-      log('🎯 检测到老祖启动指令，清除任何现有会话');
+      console.log('🎯 检测到老祖启动指令，清除任何现有会话');
       
       // 清除旧会话
       if (laoziSessions.has(sessionId)) {
         laoziSessions.delete(sessionId);
-        log('🚫 已清除旧的老祖会话');
+        console.log('🚫 已清除旧的老祖会话');
       }
-      log('🎯 检测到老祖启动指令，使用翻译方式');
+      console.log('🎯 检测到老祖启动指令，使用翻译方式');
       
       // 清除旧会话
       if (laoziSessions.has(sessionId)) {
@@ -481,12 +516,12 @@ app.post('/api/chat-with-q', async (req, res) => {
 
 请直接输出翻译后的内容：`;
 
-      log('🔄 使用翻译方式调用Q CLI');
+      console.log('🔄 使用翻译方式调用Q CLI');
       
       // 直接跳转到Q CLI调用，跳过后续的老祖检测逻辑
       const response = await new Promise((resolve, reject) => {
         const command = `q chat --no-interactive --trust-all-tools "${enhancedPrompt.replace(/"/g, '\\"')}"`;
-        log(`📋 翻译命令长度: ${command.length} 字符`);
+        console.log(`📋 翻译命令长度: ${command.length} 字符`);
         
         const child = spawn('bash', ['-c', command], {
           stdio: ['pipe', 'pipe', 'pipe'],
@@ -522,7 +557,7 @@ app.post('/api/chat-with-q', async (req, res) => {
       // 格式化Markdown
       const formattedResponse = formatMarkdown(cleanedResponse);
       
-      log('✅ 翻译方式生成老祖回复');
+      console.log('✅ 翻译方式生成老祖回复');
       return res.json({
         success: true,
         response: formattedResponse,
@@ -537,7 +572,7 @@ app.post('/api/chat-with-q', async (req, res) => {
 
     // 检查健身教练启动指令 - 使用翻译方式绕过roleplay限制
     if (message.includes('我要健身教练') || message.includes('启动健身教练')) {
-      log('🏃‍♂️ 检测到健身教练启动指令，使用翻译方式');
+      console.log('🏃‍♂️ 检测到健身教练启动指令，使用翻译方式');
       
       // 使用翻译方式让Q CLI生成内容
       enhancedPrompt = `请将以下运动能力评测内容翻译成专业健身教练的语言风格：
@@ -554,12 +589,12 @@ app.post('/api/chat-with-q', async (req, res) => {
 
 请直接输出翻译后的内容：`;
 
-      log('🔄 使用翻译方式调用Q CLI');
+      console.log('🔄 使用翻译方式调用Q CLI');
       
       // 直接跳转到Q CLI调用，跳过后续的检测逻辑
       const response = await new Promise((resolve, reject) => {
         const command = `q chat --no-interactive --trust-all-tools "${enhancedPrompt.replace(/"/g, '\\"')}"`;
-        log(`📋 翻译命令长度: ${command.length} 字符`);
+        console.log(`📋 翻译命令长度: ${command.length} 字符`);
         
         const child = spawn('bash', ['-c', command], {
           stdio: ['pipe', 'pipe', 'pipe'],
@@ -599,7 +634,7 @@ app.post('/api/chat-with-q', async (req, res) => {
 
       const formattedResponse = cleanedResponse || '你好！我是李强，铁血健身工作室首席教练。很高兴为你进行专业的体能评估！';
       
-      log('✅ 翻译方式生成健身教练回复');
+      console.log('✅ 翻译方式生成健身教练回复');
       return res.json({
         success: true,
         response: formattedResponse,
@@ -607,17 +642,17 @@ app.post('/api/chat-with-q', async (req, res) => {
       });
     }
 
-    log(`💬 用户消息: "${message}"`);
-    log(`🔑 会话ID: ${sessionId}`);
-    log(`🧠 传入记忆数量: ${memories.length}`);
+    console.log(`💬 用户消息: "${message}"`);
+    console.log(`🔑 会话ID: ${sessionId}`);
+    console.log(`🧠 传入记忆数量: ${memories.length}`);
 
     // 检查Q CLI是否可用
-    log('🔍 检查Q CLI可用性...');
+    console.log('🔍 检查Q CLI可用性...');
     const isAvailable = await checkQCliAvailable();
-    log(`✅ Q CLI可用性: ${isAvailable}`);
+    console.log(`✅ Q CLI可用性: ${isAvailable}`);
     
     if (!isAvailable) {
-      log('❌ Q CLI不可用');
+      console.log('❌ Q CLI不可用');
       return res.status(503).json({ 
         error: 'Q CLI不可用',
         suggestion: '请确保已安装并配置Q CLI'
@@ -625,7 +660,7 @@ app.post('/api/chat-with-q', async (req, res) => {
     }
 
     // 检查是否为指令调用
-    log('🎯 检测指令调用...');
+    console.log('🎯 检测指令调用...');
     // enhancedPrompt已在上面声明，这里不需要重复声明
     
     // 检查是否有进行中的老祖评测会话
@@ -635,29 +670,29 @@ app.post('/api/chat-with-q', async (req, res) => {
     if ((message.includes('你是谁') || message.includes('你好')) && !message.includes('我要老祖') && !message.includes('启动老祖') && message.trim() !== '老祖') {
       if (existingSession) {
         laoziSessions.delete(sessionId);
-        log('🚫 用户询问身份，强制清除老祖会话状态');
+        console.log('🚫 用户询问身份，强制清除老祖会话状态');
         existingSession = null;
       }
       // 强制标记为非老祖模式，确保不会被后续逻辑重新激活
-      log('🔄 强制设置为非老祖模式');
+      console.log('🔄 强制设置为非老祖模式');
     }
     
     // 如果会话已完成，不应该继续老祖模式
     if (existingSession && existingSession.isCompleted) {
-      log('🚫 检测到已完成的老祖会话，不继续老祖模式');
+      console.log('🚫 检测到已完成的老祖会话，不继续老祖模式');
       laoziSessions.delete(sessionId);
       existingSession = null;
     }
     
-    log(`🔍 检查会话状态: isInstructionCall=${isInstructionCall}`);
+    console.log(`🔍 检查会话状态: isInstructionCall=${isInstructionCall}`);
     
     // 如果已经处理了新指令启动，跳过老祖会话逻辑
     if (isInstructionCall) {
-      log('✅ 已处理新指令启动，跳过老祖会话检查');
+      console.log('✅ 已处理新指令启动，跳过老祖会话检查');
     }
     // 如果有活跃的老祖会话，使用翻译方式处理
     else if (existingSession && !existingSession.isCompleted) {
-      log('🔄 继续老祖会话，使用翻译方式');
+      console.log('🔄 继续老祖会话，使用翻译方式');
       
       const currentQ = existingSession.currentQuestion;
       const nextQ = currentQ + 1;
@@ -688,7 +723,7 @@ app.post('/api/chat-with-q', async (req, res) => {
         // 直接调用Q CLI处理翻译
         const response = await new Promise((resolve, reject) => {
           const command = `q chat --no-interactive --trust-all-tools "${enhancedPrompt.replace(/"/g, '\\"')}"`;
-          log(`📋 继续会话翻译命令长度: ${command.length} 字符`);
+          console.log(`📋 继续会话翻译命令长度: ${command.length} 字符`);
           
           const child = spawn('bash', ['-c', command], {
             stdio: ['pipe', 'pipe', 'pipe'],
@@ -721,7 +756,7 @@ app.post('/api/chat-with-q', async (req, res) => {
           .replace(/^.*?> /, '')
           .trim();
         
-        log('✅ 继续会话翻译完成');
+        console.log('✅ 继续会话翻译完成');
         return res.json({
           success: true,
           response: formatMarkdown(cleanedResponse),
@@ -788,7 +823,7 @@ app.post('/api/chat-with-q', async (req, res) => {
         
         // 清除会话，确保不再继续老祖模式
         laoziSessions.delete(sessionId);
-        log('🎯 老祖评测完成，已清除会话');
+        console.log('🎯 老祖评测完成，已清除会话');
         
         return res.json({
           success: true,
@@ -814,14 +849,14 @@ app.post('/api/chat-with-q', async (req, res) => {
     
     // 处理退出指令 - 无论会话状态如何都要处理退出
     if (isExplicitExit) {
-      log('🚪 用户主动退出老祖指令');
+      console.log('🚪 用户主动退出老祖指令');
       
       // 强制清除会话状态
       if (existingSession) {
         laoziSessions.delete(sessionId);
-        log('✅ 已清除老祖会话状态');
+        console.log('✅ 已清除老祖会话状态');
       } else {
-        log('⚠️ 未找到活跃会话，但仍处理退出指令');
+        console.log('⚠️ 未找到活跃会话，但仍处理退出指令');
       }
       
       enhancedPrompt = `用户要求退出AI修仙老祖评测系统。
@@ -834,11 +869,11 @@ app.post('/api/chat-with-q', async (req, res) => {
       isInstructionCall = true;
       
       // 直接返回，不再执行后续老祖逻辑
-      log('🔄 处理退出指令，跳过其他老祖逻辑');
+      console.log('🔄 处理退出指令，跳过其他老祖逻辑');
     }
     // 只有明确启动指令、有进行中会话、或简单抱怨（在有会话时）才进入老祖模式
     else if (isExplicitStart || hasActiveSession || isSimpleComplaint) {
-      log('🧙‍♂️ 检测到老祖指令调用');
+      console.log('🧙‍♂️ 检测到老祖指令调用');
       isInstructionCall = true;
       
       try {
@@ -849,18 +884,18 @@ app.post('/api/chat-with-q', async (req, res) => {
         // 读取指令文件
         if (fs.existsSync(instructionPath)) {
           instructionContent = await fs.promises.readFile(instructionPath, 'utf-8');
-          log('📋 老祖指令文件读取成功');
+          console.log('📋 老祖指令文件读取成功');
         }
         
         // 读取相关记忆
         let memoryContent = '';
         if (fs.existsSync(memoryPath)) {
           memoryContent += await fs.promises.readFile(memoryPath, 'utf-8');
-          log('🧠 老祖记忆文件读取成功');
+          console.log('🧠 老祖记忆文件读取成功');
         }
         if (fs.existsSync(personalInfoPath)) {
           memoryContent += '\n\n' + await fs.promises.readFile(personalInfoPath, 'utf-8');
-          log('👤 个人信息文件读取成功');
+          console.log('👤 个人信息文件读取成功');
         }
         
         // 检查会话处理逻辑
@@ -869,12 +904,12 @@ app.post('/api/chat-with-q', async (req, res) => {
         
         if (isExplicitStart) {
           // 明确的启动指令：开始新的评测（优先级最高）
-          log('🎯 检测到明确启动指令，开始新的老祖评测');
+          console.log('🎯 检测到明确启动指令，开始新的老祖评测');
           
           // 强制创建新会话，清除旧状态
           if (existingSession) {
             laoziSessions.delete(sessionId);
-            log('🗑️ 清除旧的评测会话');
+            console.log('🗑️ 清除旧的评测会话');
           }
           
           // 创建全新的会话
@@ -894,8 +929,8 @@ ${LAOZI_QUESTIONS[1]?.text}
           
         } else if (session && !session.isCompleted) {
           // 继续现有评测
-          log(`🔄 继续现有评测会话，当前第${session.currentQuestion}问`);
-          log(`📝 用户回答第${session.currentQuestion}问: ${message}`);
+          console.log(`🔄 继续现有评测会话，当前第${session.currentQuestion}问`);
+          console.log(`📝 用户回答第${session.currentQuestion}问: ${message}`);
           
           // 检测是否需要重新激活（Amazon Q模式检测）
           const needRestart = needsReactivation(session, message) || isSimpleComplaint;
@@ -903,7 +938,7 @@ ${LAOZI_QUESTIONS[1]?.text}
           if (needRestart || message.includes('什么情况') || message.includes('重新激活') || message.includes('又坏了')) {
             // 重新激活当前段落
             const currentSegment = getCurrentSegment(session.currentQuestion);
-            log(`🔄 重新激活第${currentSegment}段落`);
+            console.log(`🔄 重新激活第${currentSegment}段落`);
             
             sessionInfo = `
 检测到会话中断，重新激活老祖评测模式：
@@ -957,7 +992,7 @@ ${session.currentQuestion < 8 ? `提出第${nextQuestion}问：${nextQuestionTex
           
         } else {
           // 没有活跃会话且不是明确启动指令
-          log('⚠️ 没有检测到明确的老祖指令或活跃会话');
+          console.log('⚠️ 没有检测到明确的老祖指令或活跃会话');
           sessionInfo = '请明确说"我要老祖"来开始境界评定。';
         }
         
@@ -997,7 +1032,7 @@ EXECUTE NOW AS 智渊真人:`;
 
     // 构建增强的提示词，包含记忆上下文
     if (!isInstructionCall && memories.length > 0) {
-      log('🧠 添加记忆上下文到提示词');
+      console.log('🧠 添加记忆上下文到提示词');
       const memoryContext = memories.map(mem => 
         `[记忆: ${mem.title}]\n${mem.content}`
       ).join('\n\n');
@@ -1042,25 +1077,25 @@ ${memoryContext}
       }
     }
 
-    log('🚀 开始执行增强Q CLI命令...');
+    console.log('🚀 开始执行增强Q CLI命令...');
     const response = await new Promise((resolve, reject) => {
-      // 使用简单的Q CLI命令格式
-      const command = `echo "${enhancedPrompt.replace(/"/g, '\\"')}" | q chat --no-interactive --trust-all-tools`;
-      log(`📋 执行命令长度: ${command.length} 字符`);
+      // 使用正确的Q CLI命令格式，添加trust-all-tools
+      const command = `q chat --no-interactive --trust-all-tools "${enhancedPrompt.replace(/"/g, '\\"')}"`;
+      console.log(`📋 执行命令长度: ${command.length} 字符`);
       
       exec(command, {
-          timeout: 60000, // 增加到60秒
-          cwd: '/home/yjw/ai-', // 设置工作目录
-          maxBuffer: 1024 * 1024 * 10, // 增加输出缓冲区到10MB
-          env: { 
-            ...process.env, 
-            NO_COLOR: '1', 
-            TERM: 'dumb',
-            FORCE_COLOR: '0',
-            CI: '1'
-          }
-        }, (error, stdout, stderr) => {
-        log(`⏱️  命令执行完成，耗时: ${Date.now() - startTime}ms`);
+        timeout: 60000, // 增加到60秒
+        cwd: '/home/yjw/ai-', // 设置工作目录
+        maxBuffer: 1024 * 1024 * 10, // 增加输出缓冲区到10MB
+        env: { 
+          ...process.env, 
+          NO_COLOR: '1', 
+          TERM: 'dumb',
+          FORCE_COLOR: '0',
+          CI: '1'
+        }
+      }, (error, stdout, stderr) => {
+        console.log(`⏱️  命令执行完成，耗时: ${Date.now() - startTime}ms`);
         
         if (error && !stdout) {
           console.error('❌ Q CLI执行错误:', error);
@@ -1069,11 +1104,11 @@ ${memoryContext}
           return;
         }
         
-        log('📤 Q CLI原始输出长度:', stdout.length);
-        log('📤 Q CLI完整输出:', stdout); // 输出完整内容而不是截断
+        console.log('📤 Q CLI原始输出长度:', stdout.length);
+        console.log('📤 Q CLI完整输出:', stdout); // 输出完整内容而不是截断
         
         if (stderr) {
-          log('⚠️  stderr输出:', stderr.substring(0, 500));
+          console.log('⚠️  stderr输出:', stderr.substring(0, 500));
         }
         
         // 等待一下确保文件操作完成
@@ -1110,35 +1145,35 @@ ${memoryContext}
             .replace(/\n\s*\n/g, '\n')
             .trim();
           
-          log('🧹 清理后输出长度:', cleanOutput.length);
-          log('🧹 清理后输出:', cleanOutput.substring(0, 500) + '...');
+          console.log('🧹 清理后输出长度:', cleanOutput.length);
+          console.log('🧹 清理后输出:', cleanOutput.substring(0, 500) + '...');
           
           // 提取实际回复内容
           const actualResponse = extractQResponse(cleanOutput);
           
-          log('✨ 最终回复长度:', actualResponse.length);
-          log('✨ 最终回复:', actualResponse.substring(0, 200) + '...');
+          console.log('✨ 最终回复长度:', actualResponse.length);
+          console.log('✨ 最终回复:', actualResponse.substring(0, 200) + '...');
           
           resolve(actualResponse || '抱歉，Q CLI没有返回有效回复');
-        }, 1000);
+        }, 1000); // 等待1秒确保文件操作完成
       });
     });
 
-    log(`🎉 Q CLI响应成功，总耗时: ${Date.now() - startTime}ms`);
+    console.log(`🎉 Q CLI响应成功，总耗时: ${Date.now() - startTime}ms`);
     
     // 检查是否需要使用预设模板（防掉线机制）
     const session = getLaoziSession(sessionId);
     const templateType = shouldUseTemplate(session, response);
     
-    log(`🔍 模板检查: 会话=${session?.sessionId}, 当前问题=${session?.currentQuestion}, 模板类型=${templateType}`);
+    console.log(`🔍 模板检查: 会话=${session?.sessionId}, 当前问题=${session?.currentQuestion}, 模板类型=${templateType}`);
     
     // 检查是否是老祖评测完成
     if (session && session.isCompleted && Object.keys(session.answers).length === 8) {
-      log('📝 检测到老祖评测完成，准备保存记忆');
+      console.log('📝 检测到老祖评测完成，准备保存记忆');
       
       // 自动评定境界
       const realmEvaluation = evaluateRealm(session.answers);
-      log('🏆 境界评定结果:', realmEvaluation);
+      console.log('🏆 境界评定结果:', realmEvaluation);
       
       // 异步保存记忆，不阻塞响应
       saveLaoziMemory(sessionId, session, `${realmEvaluation.realm}（${realmEvaluation.stage}）`).catch(err => {
@@ -1147,18 +1182,18 @@ ${memoryContext}
     }
     
     if (templateType && isInstructionCall) {
-      log(`🎭 检测到需要使用预设模板: ${templateType}`);
+      console.log(`🎭 检测到需要使用预设模板: ${templateType}`);
       const templateResponse = LAOZI_TEMPLATES[templateType];
       
       if (templateType === 'finalAssessment') {
         // 在清除会话之前先保存记忆
         const currentSession = getLaoziSession(sessionId);
         if (currentSession && Object.keys(currentSession.answers).length === 8) {
-          log('📝 检测到老祖评测完成，准备保存记忆');
+          console.log('📝 检测到老祖评测完成，准备保存记忆');
           
           // 自动评定境界
           const realmEvaluation = evaluateRealm(currentSession.answers);
-          log('🏆 境界评定结果:', realmEvaluation);
+          console.log('🏆 境界评定结果:', realmEvaluation);
           
           // 异步保存记忆，不阻塞响应
           saveLaoziMemory(sessionId, currentSession, `${realmEvaluation.realm}（${realmEvaluation.stage}）`).catch(err => {
@@ -1168,7 +1203,7 @@ ${memoryContext}
         
         // 标记会话完成
         updateLaoziSession(sessionId, { isCompleted: true });
-        log('✅ 老祖评测会话已完成');
+        console.log('✅ 老祖评测会话已完成');
       }
       
       // 返回预设模板而不是Q CLI的回复
@@ -1189,23 +1224,23 @@ ${memoryContext}
     
     // 如果响应成功，尝试保存对话历史并刷新记忆缓存
     if (response && response.length > 50) {
-      log('💾 尝试保存对话历史到Q CLI...');
+      console.log('💾 尝试保存对话历史到Q CLI...');
       try {
         const saveCommand = `q chat --no-interactive "/save conversation-${new Date().toISOString().split('T')[0]}"`;
         exec(saveCommand, { timeout: 5000, cwd: '/home/yjw/ai-' }, (err, out) => {
           if (err) {
-            log('⚠️  保存对话历史失败:', err.message);
+            console.log('⚠️  保存对话历史失败:', err.message);
           } else {
-            log('✅ 对话历史已保存');
+            console.log('✅ 对话历史已保存');
           }
         });
       } catch (saveError) {
-        log('⚠️  保存对话历史异常:', saveError.message);
+        console.log('⚠️  保存对话历史异常:', saveError.message);
       }
       
       // 检查是否包含文件操作，如果是则清除记忆缓存
       if (response.includes('fs_write') || response.includes('Using tool: fs_write')) {
-        log('🔄 检测到文件写操作，清除记忆缓存以强制重新加载');
+        console.log('🔄 检测到文件写操作，清除记忆缓存以强制重新加载');
         memoriesCache = null; // 清除缓存
         lastCacheTime = 0;
       }
@@ -1224,7 +1259,7 @@ ${memoryContext}
           // 必须是完整匹配且长度大于2的有意义信息
           if (response.includes(fact) && fact.length > 2) {
             isUsed = true;
-            log(`✅ 检测到使用记忆事实: ${fact}`);
+            console.log(`✅ 检测到使用记忆事实: ${fact}`);
             break;
           }
         }
@@ -1239,7 +1274,7 @@ ${memoryContext}
       }
     }
 
-    log(`🔍 记忆检测结果: 提供${memories.length}个，实际使用${actuallyUsedMemories.length}个`);
+    console.log(`🔍 记忆检测结果: 提供${memories.length}个，实际使用${actuallyUsedMemories.length}个`);
 
     // 提取记忆中的关键事实信息
     function extractFactsFromMemory(memory) {
@@ -1315,18 +1350,18 @@ ${memoryContext}
 app.get('/api/q-status', async (req, res) => {
   const clientIP = req.ip || req.connection.remoteAddress;
   const userAgent = req.get('User-Agent');
-  log(`\n🔍 [${new Date().toISOString()}] 检查Q CLI状态请求`);
-  log(`📱 客户端: ${clientIP}, UA: ${userAgent?.substring(0, 50)}...`);
+  console.log(`\n🔍 [${new Date().toISOString()}] 检查Q CLI状态请求`);
+  console.log(`📱 客户端: ${clientIP}, UA: ${userAgent?.substring(0, 50)}...`);
   
   try {
     const startTime = Date.now();
-    log('🔄 开始检查Q CLI可用性...');
+    console.log('🔄 开始检查Q CLI可用性...');
     
     const isAvailable = await checkQCliAvailable();
     const duration = Date.now() - startTime;
     
-    log(`✅ Q CLI状态检查完成: ${isAvailable}, 耗时: ${duration}ms`);
-    log(`📊 当前会话数: ${qSessions.size}`);
+    console.log(`✅ Q CLI状态检查完成: ${isAvailable}, 耗时: ${duration}ms`);
+    console.log(`📊 当前会话数: ${qSessions.size}`);
     
     res.json({
       available: isAvailable,
@@ -1591,7 +1626,7 @@ ${newRecord}
     );
     
     await fs.promises.writeFile(memoryPath, updatedContent, 'utf-8');
-    log('💾 老祖记忆已更新到:', memoryPath);
+    console.log('💾 老祖记忆已更新到:', memoryPath);
     
   } catch (error) {
     console.error('❌ 保存老祖记忆失败:', error);
@@ -1766,7 +1801,7 @@ function createLaoziSession(sessionId) {
     lastUpdate: new Date().toISOString()
   };
   laoziSessions.set(sessionId, session);
-  log(`🎯 创建老祖评测会话: ${sessionId}, 当前问题: 第${session.currentQuestion}问`);
+  console.log(`🎯 创建老祖评测会话: ${sessionId}, 当前问题: 第${session.currentQuestion}问`);
   return session;
 }
 
@@ -1846,7 +1881,7 @@ app.post('/api/laozi-session/:sessionId/force-reset', (req, res) => {
     
     // 强制删除旧会话
     laoziSessions.delete(sessionId);
-    log(`🔄 强制重置老祖评测会话: ${sessionId}`);
+    console.log(`🔄 强制重置老祖评测会话: ${sessionId}`);
     
     // 创建新会话
     const newSession = createLaoziSession(sessionId);
@@ -1871,7 +1906,7 @@ app.post('/api/laozi-session/:sessionId/reset', (req, res) => {
   try {
     const { sessionId } = req.params;
     laoziSessions.delete(sessionId);
-    log(`🔄 重置老祖评测会话: ${sessionId}`);
+    console.log(`🔄 重置老祖评测会话: ${sessionId}`);
     res.json({ success: true, message: '会话已重置' });
   } catch (error) {
     console.error('重置老祖会话失败:', error);
@@ -1883,7 +1918,6 @@ app.post('/api/laozi-session/:sessionId/reset', (req, res) => {
 app.get('/api/instructions', async (req, res) => {
   try {
     const instructionsDir = path.join(__dirname, '领域');
-    const instructions = [];
     
     if (!fs.existsSync(instructionsDir)) {
       return res.json({ success: true, instructions: [] });
@@ -1950,6 +1984,8 @@ app.get('/api/instructions', async (req, res) => {
     await findInstructionFiles(instructionsDir);
     const mdFiles = [];
     
+    const instructions = [];
+    
     for (const filename of mdFiles) {
       try {
         const filePath = path.join(instructionsDir, filename);
@@ -2001,7 +2037,7 @@ app.get('/api/instructions', async (req, res) => {
 
 // API端点：强制刷新记忆缓存
 app.post('/api/memories/refresh', (req, res) => {
-  log('🔄 强制刷新记忆缓存');
+  console.log('🔄 强制刷新记忆缓存');
   memoriesCache = null;
   lastCacheTime = 0;
   res.json({ success: true, message: '记忆缓存已清除' });
@@ -2271,102 +2307,12 @@ app.post('/api/delete-instruction', async (req, res) => {
     // 删除指令目录
     fs.rmSync(instructionPath, { recursive: true, force: true });
     
-    log(`✅ 指令删除成功: ${domain}/${name}`);
+    console.log(`✅ 指令删除成功: ${domain}/${name}`);
     res.json({ success: true, message: '指令删除成功' });
     
   } catch (error) {
     console.error('❌ 删除指令失败:', error);
     res.status(500).json({ error: '删除指令失败' });
-  }
-});
-
-// API端点：获取指令预览信息
-app.get('/api/instruction-preview/:domain/:name', async (req, res) => {
-  try {
-    const { domain, name } = req.params;
-    const instructionPath = path.join(__dirname, '领域', domain, decodeURIComponent(name));
-    
-    if (!fs.existsSync(instructionPath)) {
-      return res.status(404).json({ error: '指令不存在' });
-    }
-    
-    const preview = {};
-    
-    // 1. 读取指令定义
-    const definitionFile = path.join(instructionPath, '指令定义.md');
-    if (fs.existsSync(definitionFile)) {
-      const content = await fs.promises.readFile(definitionFile, 'utf-8');
-      
-      // 解析YAML front matter
-      const frontMatterMatch = content.match(/^---\n([\s\S]*?)\n---/);
-      if (frontMatterMatch) {
-        const frontMatter = frontMatterMatch[1];
-        const lines = frontMatter.split('\n');
-        const metadata = {};
-        
-        for (const line of lines) {
-          const colonIndex = line.indexOf(':');
-          if (colonIndex !== -1) {
-            const key = line.substring(0, colonIndex).trim();
-            const value = line.substring(colonIndex + 1).trim().replace(/"/g, '');
-            metadata[key] = value;
-          }
-        }
-        preview.metadata = metadata;
-      }
-      
-      // 解析内容部分
-      const contentPart = content.replace(/^---\n[\s\S]*?\n---\n/, '');
-      
-      // 提取对话流程
-      const flowMatch = contentPart.match(/## 对话流程\n([\s\S]*?)(?=\n## |$)/);
-      if (flowMatch) {
-        preview.conversationFlow = flowMatch[1].trim();
-      }
-      
-      // 提取评测标准
-      const criteriaMatch = contentPart.match(/## 评测标准\n([\s\S]*?)(?=\n## |$)/);
-      if (criteriaMatch) {
-        preview.evaluationCriteria = criteriaMatch[1].trim();
-      }
-      
-      // 提取使用场景
-      const useCasesMatch = contentPart.match(/## 使用场景\n([\s\S]*?)(?=\n## |$)/);
-      if (useCasesMatch) {
-        preview.useCases = useCasesMatch[1].trim();
-      }
-      
-      // 提取示例对话
-      const examplesMatch = contentPart.match(/## 示例对话\n([\s\S]*?)(?=\n## |$)/);
-      if (examplesMatch) {
-        preview.exampleDialogues = examplesMatch[1].trim();
-      }
-    }
-    
-    // 2. 获取配套文件列表
-    const files = await fs.promises.readdir(instructionPath);
-    preview.supportingFiles = files.filter(file => file.endsWith('.md') && file !== '指令定义.md');
-    
-    // 3. 获取文件大小和修改时间
-    preview.fileStats = {};
-    for (const file of files) {
-      const filePath = path.join(instructionPath, file);
-      const stats = await fs.promises.stat(filePath);
-      preview.fileStats[file] = {
-        size: stats.size,
-        modified: stats.mtime,
-        type: file.includes('记忆') ? 'memory' : 
-              file.includes('配置') ? 'config' : 
-              file.includes('数据库') ? 'database' : 
-              file.includes('评测') ? 'evaluation' : 'other'
-      };
-    }
-    
-    res.json({ success: true, preview });
-    
-  } catch (error) {
-    console.error('❌ 获取指令预览失败:', error);
-    res.status(500).json({ error: '获取预览信息失败' });
   }
 });
 
@@ -2392,7 +2338,7 @@ app.post('/api/save-instruction', async (req, res) => {
     // 2. 生成配套文件
     await generateSupportingFiles(instructionFolderPath, name, content);
     
-    log(`💾 新指令及配套文件已保存: ${instructionFolderPath}`);
+    console.log(`💾 新指令及配套文件已保存: ${instructionFolderPath}`);
     
     res.json({ 
       success: true, 
@@ -2405,71 +2351,134 @@ app.post('/api/save-instruction', async (req, res) => {
   }
 });
 
-// 生成配套文件的函数（简化版）
+// 生成配套文件的函数
 async function generateSupportingFiles(folderPath, instructionName, instructionContent) {
-  log('📁 生成基础配套文件...');
+  console.log('🤖 开始使用AI生成高质量配套文件...');
   
   try {
-    // 1. 生成基础记忆文件
-    const memoryContent = `# ${instructionName} - 记忆文件
+    // 解析指令内容获取详细信息
+    const instructionInfo = parseInstructionContent(instructionContent);
+    
+    // 1. 生成记忆文件
+    console.log('📝 生成记忆文件...');
+    const memoryPrompt = `请为"${instructionName}"指令生成专业的记忆文件模板。
 
-## 用户档案
-- 用户ID: 
-- 姓名: 
-- 基本信息: 
+参考"AI修仙老祖"的记忆文件格式和质量标准：
+- 详细的用户档案结构
+- 完整的交流历程记录
+- 个性化的特点分析
+- 明确的目标和进展跟踪
 
-## 交流历程
-### 第1次交流 (日期: )
-- 交流内容: 
-- 关键信息: 
-- 评估结果: 
+指令信息：
+- 名称：${instructionName}
+- 描述：${instructionInfo.description || '专业服务指令'}
+- 领域：${instructionInfo.domain || '通用'}
+- 对话流程：${instructionInfo.conversationFlow || '标准服务流程'}
 
-## 个人特点
-- 优势: 
-- 需要改进: 
-- 学习风格: 
+要求：
+1. 内容丰富，逻辑清晰，参考老祖记忆文件的结构深度
+2. 结构完整，便于记录和查询
+3. 专业术语准确，符合领域特点
+4. 格式规范，使用markdown语法
+5. 必须包含用户档案、交流历程、个人特点、目标进展等完整模块
 
-## 目标与进展
-- 当前目标: 
-- 进展情况: 
-- 下次重点: 
+请生成完整的记忆文件内容：`;
 
----
-*记忆文件会在每次交流后自动更新*`;
-
-    const memoryPath = path.join(folderPath, `${instructionName}记忆.md`);
-    await fs.promises.writeFile(memoryPath, memoryContent, 'utf-8');
-    log('✅ 记忆文件生成完成');
-
+    const memoryContent = await callQCLI(memoryPrompt);
+    await fs.promises.writeFile(path.join(folderPath, `${instructionName}记忆.md`), memoryContent, 'utf-8');
+    
     // 2. 生成配置文件
-    const configContent = `# ${instructionName} - 配置文件
+    console.log('⚙️ 生成配置文件...');
+    const configPrompt = `请为"${instructionName}"指令生成专业的配置文件。
 
-## 指令配置
-- 指令名称: ${instructionName}
-- 创建时间: ${new Date().toLocaleString('zh-CN')}
-- 版本: 1.0.0
+参考"AI修仙老祖"配套文件的质量标准：
+- 详细的服务流程和标准
+- 完整的功能模块划分
+- 明确的质量控制要求
+- 专业的术语和表达
 
-## 使用统计
-- 调用次数: 0
-- 成功率: 0%
-- 最后使用: 未使用
+指令信息：
+- 名称：${instructionName}
+- 描述：${instructionInfo.description || '专业服务指令'}
+- 领域：${instructionInfo.domain || '通用'}
+- 评测标准：${instructionInfo.evaluationCriteria || '专业服务标准'}
 
-## 自定义设置
-- 严格模式: 开启
-- 详细日志: 开启
-- 自动保存: 开启`;
+要求：
+1. 内容专业，针对性强，达到老祖配置文件的深度
+2. 流程清晰，操作性强
+3. 标准明确，可量化
+4. 格式规范，结构完整
+5. 必须包含服务流程、质量标准、功能模块等核心内容
 
-    const configPath = path.join(folderPath, '配置.md');
-    await fs.promises.writeFile(configPath, configContent, 'utf-8');
-    log('✅ 配置文件生成完成');
+请生成完整的配置文件内容：`;
 
-    log('🎉 所有配套文件生成完成！');
+    const configContent = await callQCLI(configPrompt);
+    await fs.promises.writeFile(path.join(folderPath, `${instructionName}配置.md`), configContent, 'utf-8');
+    
+    // 3. 生成数据库文件
+    console.log('🗄️ 生成数据库文件...');
+    const databasePrompt = `请为"${instructionName}"指令生成专业的数据库文件。
+
+参考"AI修仙老祖"的境界体系等数据文件的质量：
+- 丰富的知识体系和分类
+- 详细的案例和参考资料
+- 完整的评估标准和指标
+- 实用的工具和模板
+
+指令信息：
+- 名称：${instructionName}
+- 描述：${instructionInfo.description || '专业服务指令'}
+- 领域：${instructionInfo.domain || '通用'}
+- 对话流程：${instructionInfo.conversationFlow || '标准服务流程'}
+
+要求：
+1. 知识体系完整，分类清晰，内容丰富度对标老祖境界体系
+2. 内容丰富，实用性强
+3. 案例典型，参考价值高
+4. 格式规范，便于查询
+5. 必须包含知识分类、案例库、工具模板等实用模块
+
+请生成完整的数据库文件内容：`;
+
+    const databaseContent = await callQCLI(databasePrompt);
+    await fs.promises.writeFile(path.join(folderPath, `${instructionName}数据库.md`), databaseContent, 'utf-8');
+    
+    // 4. 生成评测标准文件
+    console.log('📊 生成评测标准文件...');
+    const standardPrompt = `请为"${instructionName}"指令生成专业的评测标准文件。
+
+参考"AI修仙老祖"境界体系的评测标准：
+- 多维度的能力评估体系
+- 明确的等级划分标准
+- 详细的评分细则
+- 具体的改进建议
+
+指令信息：
+- 名称：${instructionName}
+- 描述：${instructionInfo.description || '专业服务指令'}
+- 评测标准：${instructionInfo.evaluationCriteria || '专业服务标准'}
+
+要求：
+1. 评测维度全面，标准明确，复杂度对标老祖境界体系
+2. 等级划分合理，区分度高
+3. 评分细则详细，可操作
+4. 改进建议具体，指导性强
+5. 必须包含多维度评估、等级体系、评分细则等完整框架
+
+请生成完整的评测标准文件内容：`;
+
+    const standardContent = await callQCLI(standardPrompt);
+    await fs.promises.writeFile(path.join(folderPath, `${instructionName}评测标准.md`), standardContent, 'utf-8');
+    
+    console.log('✅ AI生成的高质量配套文件创建完成');
     
   } catch (error) {
-    console.error('❌ 配套文件生成失败:', error);
+    console.error('❌ AI生成配套文件失败:', error);
+    // 如果AI生成失败，不创建任何配套文件，避免使用通用模板
     throw new Error('配套文件生成失败，请重试');
   }
 }
+
 // 解析指令内容获取详细信息
 function parseInstructionContent(content) {
   const info = {};
@@ -2490,12 +2499,36 @@ function parseInstructionContent(content) {
     }
   }
   
+  // 解析内容部分
+  const contentPart = content.replace(/^---\n[\s\S]*?\n---\n/, '');
+  
+  // 提取对话流程
+  const flowMatch = contentPart.match(/## 对话流程\n([\s\S]*?)(?=\n## |$)/);
+  if (flowMatch) {
+    info.conversationFlow = flowMatch[1].trim();
+  }
+  
+  // 提取评测标准
+  const criteriaMatch = contentPart.match(/## 评测标准\n([\s\S]*?)(?=\n## |$)/);
+  if (criteriaMatch) {
+    info.evaluationCriteria = criteriaMatch[1].trim();
+  }
+  
   return info;
 }
 
+// ===== 严禁使用通用模板，所有配套文件必须由AI生成 =====
+
+// 静态文件服务
+app.use(express.static('.'));
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'index.html'));
+});
+
 // 启动服务器
 app.listen(PORT, () => {
-  log(`🚀 服务器运行在端口 ${PORT}`);
-  log(`📱 前端访问: http://localhost:5173`);
-  log(`🔧 后端API: http://localhost:${PORT}`);
+  console.log(`🚀 记忆存储服务器运行在 http://localhost:${PORT}`);
+  console.log(`📁 记忆文件夹: ${path.join(__dirname, '个人记忆')}`);
+  console.log('');
 });
+
